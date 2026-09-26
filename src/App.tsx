@@ -262,23 +262,29 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
     });
   };
 
-  const doctorLink = useMemo(() => {
-    let base = window.location.origin;
+ const doctorLink = useMemo(() => {
+  let url: URL;
 
-    if (isLocalhost && shareBaseUrl.trim()) {
-      try {
-        base = new URL(shareBaseUrl.trim()).origin;
-      } catch {
-        base = window.location.origin;
-      }
+  if (isLocalhost && shareBaseUrl.trim()) {
+    try {
+      url = new URL(shareBaseUrl.trim());
+    } catch {
+      url = new URL(window.location.href);
     }
+  } else {
+    url = new URL(window.location.href);
+  }
 
-    const url = new URL(base);
-    url.searchParams.set("role", "doctor");
-    url.searchParams.set("case", clinicalCase.id);
-    url.searchParams.set("run", runId);
-    return url.toString();
-  }, [clinicalCase.id, runId, isLocalhost, shareBaseUrl]);
+  url.search = "";
+  url.hash = "";
+
+  url.searchParams.set("role", "doctor");
+  url.searchParams.set("case", clinicalCase.id);
+  url.searchParams.set("run", runId);
+
+  return url.toString();
+}, [clinicalCase.id, runId, isLocalhost, shareBaseUrl]);
+
 
   const qrReady = !isLocalhost || Boolean(shareBaseUrl.trim());
 
