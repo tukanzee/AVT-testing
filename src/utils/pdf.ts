@@ -3,14 +3,14 @@ import type { ClinicalCase, GroundTruthItem } from "../types";
 
 type ExportArgs = {
   clinicalCase: ClinicalCase;
-  runId: string;
+  sessionId: string;
   selectedItems: GroundTruthItem[];
   additionalNotes: string;
 };
 
 export function exportGroundTruthPdf({
   clinicalCase,
-  runId,
+  sessionId,
   selectedItems,
   additionalNotes
 }: ExportArgs) {
@@ -46,7 +46,7 @@ export function exportGroundTruthPdf({
   pdf.setFontSize(10);
   addWrapped(`${clinicalCase.id} — ${clinicalCase.title}`);
   addWrapped(`Setting: ${clinicalCase.setting}`);
-  addWrapped(`Run ID: ${runId}`);
+  addWrapped(`Session reference: ${sessionId}`);
   addWrapped(`Generated: ${new Date().toLocaleString()}`);
   y += 3;
 
@@ -97,5 +97,5 @@ export function exportGroundTruthPdf({
     8
   );
 
-  pdf.save(`${clinicalCase.id}_${runId}_ground_truth.pdf`);
+  pdf.save(`${clinicalCase.id}_${sessionId}_ground_truth.pdf`);
 }

@@ -1,30 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import QRCode from "react-qr-code";
 import { cases, getCaseById } from "./data/cases";
 import type { ClinicalCase, GroundTruthItem } from "./types";
 import { exportGroundTruthPdf } from "./utils/pdf";
 
 type Role = "doctor" | "patient" | null;
 
-function makeRunId() {
+function makeSessionId() {
+  const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+  const suffix = Array.from(
+    { length: 4 },
+    () => alphabet[Math.floor(Math.random() * alphabet.length)]
+  ).join("");
+  return `${stamp}-${suffix}`;
 }
 
 function useQueryState() {
   const params = new URLSearchParams(window.location.search);
   const role = (params.get("role") as Role) ?? null;
   const caseId = params.get("case");
-  const runId = params.get("run");
-  return { role, caseId, runId };
+  return { role, caseId };
 }
 
-function setRoute(role: Role, caseId?: string, runId?: string) {
+function setRoute(role: Role, caseId?: string) {
   const url = new URL(window.location.href);
   url.search = "";
+  url.hash = "";
   if (role) url.searchParams.set("role", role);
   if (caseId) url.searchParams.set("case", caseId);
-  if (runId) url.searchParams.set("run", runId);
   window.history.pushState({}, "", url);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
@@ -39,26 +42,33 @@ function App() {
   }, []);
 
   void routeVersion;
-  const { role, caseId, runId } = useQueryState();
+  const { role, caseId } = useQueryState();
   const clinicalCase = getCaseById(caseId);
 
-  if (!role || !clinicalCase || !runId) {
+  if (!role || !clinicalCase) {
     return <LandingPage />;
   }
 
   if (role === "doctor") {
-    return <DoctorView clinicalCase={clinicalCase} runId={runId} />;
+    return <DoctorView clinicalCase={clinicalCase} />;
   }
 
-  return <PatientView clinicalCase={clinicalCase} runId={runId} />;
+  return <PatientView clinicalCase={clinicalCase} />;
 }
 
 function LandingPage() {
+  const [selectedRole, setSelectedRole] = useState<Exclude<Role, null> | null>(null);
   const [selectedCase, setSelectedCase] = useState(cases[0]?.id ?? "");
 
-  const startRun = () => {
-    const run = makeRunId();
-    setRoute("patient", selectedCase, run);
+  const continueToRole = () => {
+    if (!selectedRole || !selectedCase) return;
+
+    if (selectedRole === "patient") {
+      const sessionId = makeSessionId();
+      localStorage.setItem(`ground-truth:active-session:${selectedCase}`, sessionId);
+    }
+
+    setRoute(selectedRole, selectedCase);
   };
 
   return (
@@ -74,6 +84,39 @@ function LandingPage() {
         <div className="notice">
           <strong>For synthetic scenarios only.</strong> Do not enter real patient-identifiable information.
         </div>
+
+        <fieldset className="role-fieldset">
+          <legend className="field-label">Choose your role</legend>
+          <div className="role-choice">
+            <label className={`role-option ${selectedRole === "patient" ? "selected" : ""}`}>
+              <input
+                type="radio"
+                name="role"
+                value="patient"
+                checked={selectedRole === "patient"}
+                onChange={() => setSelectedRole("patient")}
+              />
+              <span className="role-option-content">
+                <strong>Patient / Actor</strong>
+                <span>Play the scripted patient and mark exactly what was spoken aloud.</span>
+              </span>
+            </label>
+
+            <label className={`role-option ${selectedRole === "doctor" ? "selected" : ""}`}>
+              <input
+                type="radio"
+                name="role"
+                value="doctor"
+                checked={selectedRole === "doctor"}
+                onChange={() => setSelectedRole("doctor")}
+              />
+              <span className="role-option-content">
+                <strong>Doctor</strong>
+                <span>Open the doctor brief, prompts, findings and management plan.</span>
+              </span>
+            </label>
+          </div>
+        </fieldset>
 
         <label className="field-label" htmlFor="case-select">
           Choose a case
@@ -91,12 +134,16 @@ function LandingPage() {
           ))}
         </select>
 
-        <button className="primary-button large-button" onClick={startRun}>
-          Start new role-play
+        <button
+          className="primary-button large-button"
+          onClick={continueToRole}
+          disabled={!selectedRole}
+        >
+          Continue
         </button>
 
-        <p className="subtle">
-          The patient/actor starts the run and shares the generated doctor link with the colleague playing the doctor.
+        <p className="subtle landing-help">
+          Both participants can open this website independently. Choose the same case, then select the role you are playing.
         </p>
       </section>
     </main>
@@ -105,18 +152,16 @@ function LandingPage() {
 
 function TopBar({
   clinicalCase,
-  runId,
   role
 }: {
   clinicalCase: ClinicalCase;
-  runId: string;
   role: "doctor" | "patient";
 }) {
   return (
     <header className="topbar">
       <div>
         <button className="link-button" onClick={() => setRoute(null)}>
-          ← New run
+          ← Choose role / case
         </button>
         <div className="topbar-title">
           {clinicalCase.id} · {clinicalCase.title}
@@ -124,16 +169,15 @@ function TopBar({
       </div>
       <div className="role-badge">
         {role === "doctor" ? "Doctor view" : "Patient / ground truth"}
-        <span>Run {runId}</span>
       </div>
     </header>
   );
 }
 
-function DoctorView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runId: string }) {
+function DoctorView({ clinicalCase }: { clinicalCase: ClinicalCase }) {
   return (
     <main className="shell">
-      <TopBar clinicalCase={clinicalCase} runId={runId} role="doctor" />
+      <TopBar clinicalCase={clinicalCase} role="doctor" />
 
       <section className="panel doctor-brief">
         <div className="eyebrow">Doctor brief</div>
@@ -203,7 +247,17 @@ function DoctorFactGroup({ title, items }: { title: string; items: GroundTruthIt
   );
 }
 
-function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runId: string }) {
+function PatientView({ clinicalCase }: { clinicalCase: ClinicalCase }) {
+  const activeSessionKey = `ground-truth:active-session:${clinicalCase.id}`;
+  const [sessionId] = useState(() => {
+    const existing = localStorage.getItem(activeSessionKey);
+    if (existing) return existing;
+
+    const created = makeSessionId();
+    localStorage.setItem(activeSessionKey, created);
+    return created;
+  });
+
   const allItems = useMemo(
     () => [
       ...clinicalCase.historyItems,
@@ -214,7 +268,7 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
     [clinicalCase]
   );
 
-  const storageKey = `ground-truth:${clinicalCase.id}:${runId}`;
+  const storageKey = `ground-truth:${clinicalCase.id}:${sessionId}`;
   const notesKey = `${storageKey}:notes`;
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => {
@@ -228,14 +282,7 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
 
   const [additionalNotes, setAdditionalNotes] = useState(() => localStorage.getItem(notesKey) ?? "");
   const [showSummary, setShowSummary] = useState(false);
-  const [copied, setCopied] = useState(false);
   const groundTruthRef = useRef<HTMLElement | null>(null);
-
-  const isLocalhost = ["localhost", "127.0.0.1"].includes(window.location.hostname);
-  const shareBaseKey = "ground-truth:share-base-url";
-  const [shareBaseUrl, setShareBaseUrl] = useState(
-    () => localStorage.getItem(shareBaseKey) ?? ""
-  );
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(Array.from(selectedIds)));
@@ -245,14 +292,6 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
     localStorage.setItem(notesKey, additionalNotes);
   }, [additionalNotes, notesKey]);
 
-  useEffect(() => {
-    if (shareBaseUrl.trim()) {
-      localStorage.setItem(shareBaseKey, shareBaseUrl.trim());
-    } else {
-      localStorage.removeItem(shareBaseKey);
-    }
-  }, [shareBaseUrl]);
-
   const toggleItem = (id: string) => {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -261,32 +300,6 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
       return next;
     });
   };
-
- const doctorLink = useMemo(() => {
-  let url: URL;
-
-  if (isLocalhost && shareBaseUrl.trim()) {
-    try {
-      url = new URL(shareBaseUrl.trim());
-    } catch {
-      url = new URL(window.location.href);
-    }
-  } else {
-    url = new URL(window.location.href);
-  }
-
-  url.search = "";
-  url.hash = "";
-
-  url.searchParams.set("role", "doctor");
-  url.searchParams.set("case", clinicalCase.id);
-  url.searchParams.set("run", runId);
-
-  return url.toString();
-}, [clinicalCase.id, runId, isLocalhost, shareBaseUrl]);
-
-
-  const qrReady = !isLocalhost || Boolean(shareBaseUrl.trim());
 
   const handleViewGroundTruth = () => {
     setShowSummary(true);
@@ -298,27 +311,10 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
     }, 60);
   };
 
-  const copyDoctorLink = async () => {
-    if (!qrReady) {
-      window.alert(
-        "Enter the Vite Network URL first so the doctor link works on a second device."
-      );
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(doctorLink);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    } catch {
-      window.prompt("Copy this doctor link:", doctorLink);
-    }
-  };
-
   const selectedItems = allItems.filter((item) => selectedIds.has(item.id));
 
-  const resetRun = () => {
-    const ok = window.confirm("Clear all ticks and free text for this run?");
+  const resetSession = () => {
+    const ok = window.confirm("Clear all ticks and free text for this session?");
     if (!ok) return;
     setSelectedIds(new Set());
     setAdditionalNotes("");
@@ -329,65 +325,7 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
 
   return (
     <main className="shell">
-      <TopBar clinicalCase={clinicalCase} runId={runId} role="patient" />
-
-      <section className="share-card qr-share-card">
-        <div className="share-copy">
-          <div className="eyebrow">Share with the doctor</div>
-          <strong>Scan this QR code on the doctor's device</strong>
-          <p className="subtle compact">
-            It opens the doctor-only script for this case and run. Your ground-truth ticks stay on this device.
-          </p>
-
-          {isLocalhost && (
-            <div className="network-url-box">
-              <label className="field-label" htmlFor="network-url">
-                Network URL for QR testing
-              </label>
-              <input
-                id="network-url"
-                className="text-input"
-                value={shareBaseUrl}
-                onChange={(event) => setShareBaseUrl(event.target.value)}
-                placeholder="e.g. http://192.168.1.20:5173"
-              />
-              <p className="subtle compact">
-                Copy the <strong>Network</strong> address printed by Vite into this box. Once the site is
-                hosted online, this field disappears and the QR code works automatically.
-              </p>
-            </div>
-          )}
-
-          <div className="share-actions">
-            <button
-              className="secondary-button"
-              onClick={copyDoctorLink}
-              disabled={!qrReady}
-            >
-              {copied ? "Copied" : "Copy doctor link"}
-            </button>
-          </div>
-        </div>
-
-        <div className="qr-card" aria-label="Doctor link QR code">
-          {qrReady ? (
-            <>
-              <QRCode
-                value={doctorLink}
-                size={180}
-                bgColor="#ffffff"
-                fgColor="#17213d"
-                level="M"
-              />
-              <div className="qr-caption">Doctor view · Run {runId}</div>
-            </>
-          ) : (
-            <div className="qr-placeholder">
-              Enter the Vite Network URL to activate the QR code for a second device.
-            </div>
-          )}
-        </div>
-      </section>
+      <TopBar clinicalCase={clinicalCase} role="patient" />
 
       <section className="panel patient-profile">
         <div className="eyebrow">Patient role</div>
@@ -470,7 +408,7 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
               onClick={() =>
                 exportGroundTruthPdf({
                   clinicalCase,
-                  runId,
+                  sessionId,
                   selectedItems,
                   additionalNotes
                 })
@@ -479,8 +417,8 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
               Save ground truth PDF
             </button>
 
-            <button className="danger-link" onClick={resetRun}>
-              Reset this run
+            <button className="danger-link" onClick={resetSession}>
+              Reset this session
             </button>
           </div>
         </aside>
@@ -490,7 +428,7 @@ function PatientView({ clinicalCase, runId }: { clinicalCase: ClinicalCase; runI
         <section ref={groundTruthRef} className="panel ground-truth-panel">
           <h2>Ground truth preview</h2>
           <p className="section-intro">
-            This is the subset of information recorded as having been spoken aloud during this run.
+            This is the subset of information recorded as having been spoken aloud during this session.
           </p>
           <GroundTruthPreview items={selectedItems} additionalNotes={additionalNotes} />
         </section>
