@@ -1,0 +1,275 @@
+.home-card {
+  width: min(760px, 100%);
+}
+
+.workflow-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.workflow-card {
+  border: 1px solid #d0d5dd;
+  border-radius: 14px;
+  background: #fff;
+  padding: 20px;
+  text-align: left;
+  display: grid;
+  gap: 8px;
+  color: #1f2937;
+}
+
+.workflow-card:hover {
+  border-color: #305cde;
+  background: #f7f9ff;
+}
+
+.workflow-card strong {
+  font-size: 1.08rem;
+}
+
+.workflow-card > span:last-child {
+  color: #667085;
+  line-height: 1.45;
+}
+
+.landing-eyebrow {
+  margin-top: 20px;
+}
+
+.validator-shell {
+  max-width: 1320px;
+}
+
+.validator-intro,
+.validator-source-card,
+.findings-panel {
+  margin-bottom: 18px;
+}
+
+.validator-intro h1 {
+  margin-bottom: 14px;
+}
+
+.file-upload {
+  display: inline-flex;
+  align-items: center;
+  border: 1px dashed #98a2b3;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-weight: 700;
+  background: #fafbfc;
+  cursor: pointer;
+}
+
+.file-upload input {
+  display: none;
+}
+
+.loaded-source {
+  margin-top: 14px;
+  border-radius: 10px;
+  background: #eefbf4;
+  border: 1px solid #c7ead7;
+  padding: 12px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 14px;
+}
+
+.loaded-source span {
+  color: #475467;
+}
+
+.validator-workspace {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.component-nav {
+  position: sticky;
+  top: 18px;
+}
+
+.component-nav h3 {
+  margin-bottom: 8px;
+}
+
+.component-nav-list {
+  display: grid;
+  margin: 14px -8px 0;
+}
+
+.component-nav-list a {
+  display: grid;
+  grid-template-columns: 12px 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 8px;
+  color: #344054;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.component-nav-list a:hover {
+  background: #f5f7fb;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #d0d5dd;
+}
+
+.status-dot.filled {
+  background: #16a05d;
+}
+
+.component-count {
+  margin-top: 14px;
+  font-size: 0.82rem;
+  color: #667085;
+}
+
+.writer-blocks {
+  display: grid;
+  gap: 14px;
+}
+
+.writer-block {
+  background: #fff;
+  border: 1px solid #d7dce3;
+  border-radius: 12px;
+  overflow: hidden;
+  scroll-margin-top: 18px;
+}
+
+.writer-block-header {
+  background: #eef1f5;
+  border-bottom: 1px solid #d7dce3;
+  padding: 10px 13px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.writer-block-header strong {
+  font-size: 0.95rem;
+}
+
+.writer-block-header span {
+  font-size: 0.76rem;
+  color: #667085;
+}
+
+.writer-block textarea {
+  width: 100%;
+  display: block;
+  border: 0;
+  resize: vertical;
+  min-height: 150px;
+  padding: 14px;
+  line-height: 1.5;
+  color: #1f2937;
+  background: #fff;
+}
+
+.writer-block textarea:focus {
+  outline: 3px solid rgba(48, 92, 222, 0.12);
+  outline-offset: -3px;
+}
+
+.validate-button {
+  justify-self: start;
+  padding: 12px 22px;
+}
+
+.validator-error {
+  color: #b42318;
+  background: #fff1f0;
+  border: 1px solid #f5c6c2;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.finding-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.finding-stats > div {
+  background: #f8f9fb;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  padding: 14px;
+  display: grid;
+  gap: 3px;
+}
+
+.finding-stats strong {
+  font-size: 1.6rem;
+}
+
+.finding-stats span {
+  color: #667085;
+  font-size: 0.85rem;
+}
+
+.findings-table-wrap {
+  overflow-x: auto;
+}
+
+.findings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.findings-table th,
+.findings-table td {
+  padding: 11px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid #e4e7ec;
+  line-height: 1.4;
+}
+
+.findings-table th {
+  color: #475467;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.category-pill {
+  display: inline-block;
+  background: #f2f4f7;
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .validator-workspace,
+  .workflow-choice {
+    grid-template-columns: 1fr;
+  }
+
+  .component-nav {
+    position: static;
+  }
+
+  .finding-stats {
+    grid-template-columns: 1fr;
+  }
+}
