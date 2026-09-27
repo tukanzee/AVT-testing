@@ -7,6 +7,7 @@ import {
   type FirstNetComponent,
   type ValidationResult
 } from "./types";
+import "./validator.css";
 
 const emptyAvtOutput = Object.fromEntries(
   FIRSTNET_COMPONENTS.map((component) => [component, ""])
