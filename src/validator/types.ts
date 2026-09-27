@@ -1,13 +1,13 @@
 export const VALIDATION_CATEGORIES = [
-  "OMISSION",
-  "DUPLICATION",
-  "OVER-SIMPLIFICATION",
-  "MISATTRIBUTION",
-  "MISCLASSIFICATION",
-  "ADDITION - NOT IN SCRIPT",
-  "CLINICAL DECISION SUPPORT / INFERENCE",
-  "EXTRANEOUS CONTENT",
-  "OBSERVATION - NOT AN APP DEFECT"
+  "Omission",
+  "Duplication",
+  "Over-simplification",
+  "Misattribution",
+  "Misclassification",
+  "Addition (not in script)",
+  "Clinical Decision Support / Inference",
+  "Extraneous Content",
+  "Observation (not an app defect)"
 ] as const;
 
 export type ValidationCategory = (typeof VALIDATION_CATEGORIES)[number];
@@ -32,11 +32,20 @@ export interface ValidationFinding {
   avtText: string;
   sourceText: string;
   description: string;
+  sourceFactIds?: string[];
   uncertain?: boolean;
+  uncertaintyReason?: string;
 }
 
 export interface ValidationResult {
+  rubricVersion: string;
   sourceFacts: number;
   correctFacts: number;
   findings: ValidationFinding[];
+}
+
+export interface ValidationRequest {
+  rubricVersion: string;
+  groundTruth: unknown;
+  avtOutput: AvtComponentContent;
 }
