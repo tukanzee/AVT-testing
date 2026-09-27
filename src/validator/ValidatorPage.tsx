@@ -10,6 +10,7 @@ import {
   type ValidationFinding
 } from "./types";
 import "./validator.css";
+import "./level1.css";
 
 const emptyAvtOutput = Object.fromEntries(
   FIRSTNET_COMPONENTS.map((component) => [component, ""])
@@ -234,13 +235,7 @@ export default function ValidatorPage({ onBack }: Props) {
   );
 }
 
-function ReviewPanel({
-  analysis,
-  decisions,
-  reviewedCount,
-  approvedFindings,
-  onDecision
-}: {
+function ReviewPanel({ analysis, decisions, reviewedCount, approvedFindings, onDecision }: {
   analysis: Level1Analysis;
   decisions: Record<string, ReviewDecision>;
   reviewedCount: number;
@@ -270,13 +265,7 @@ function ReviewPanel({
         ) : (
           <div className="candidate-list">
             {analysis.candidates.map((candidate, index) => (
-              <CandidateCard
-                key={candidate.id}
-                candidate={candidate}
-                number={index + 1}
-                decision={decisions[candidate.id] ?? { status: "pending" }}
-                onDecision={onDecision}
-              />
+              <CandidateCard key={candidate.id} candidate={candidate} number={index + 1} decision={decisions[candidate.id] ?? { status: "pending" }} onDecision={onDecision} />
             ))}
           </div>
         )}
@@ -291,15 +280,7 @@ function ReviewPanel({
         ) : (
           <div className="findings-table-wrap">
             <table className="findings-table">
-              <thead>
-                <tr>
-                  <th>Component</th>
-                  <th>Category</th>
-                  <th>AVT documented</th>
-                  <th>Source says</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Component</th><th>Category</th><th>AVT documented</th><th>Source says</th><th>Description</th></tr></thead>
               <tbody>
                 {approvedFindings.map((finding) => (
                   <tr key={finding.id}>
@@ -319,70 +300,30 @@ function ReviewPanel({
   );
 }
 
-function CandidateCard({
-  candidate,
-  number,
-  decision,
-  onDecision
-}: {
+function CandidateCard({ candidate, number, decision, onDecision }: {
   candidate: ReviewCandidate;
   number: number;
   decision: ReviewDecision;
   onDecision: (candidate: ReviewCandidate, decision: ReviewDecision) => void;
 }) {
   const category = decision.category ?? candidate.suggestedCategory ?? "Omission";
-
   return (
     <article className={`candidate-card ${decision.status !== "pending" ? `reviewed ${decision.status}` : ""}`}>
       <div className="candidate-header">
-        <div>
-          <span className="candidate-number">{number}</span>
-          <strong>{candidate.component}</strong>
-        </div>
-        {typeof candidate.similarity === "number" && (
-          <span className="similarity">semantic match {Math.round(candidate.similarity * 100)}%</span>
-        )}
+        <div><span className="candidate-number">{number}</span><strong>{candidate.component}</strong></div>
+        {typeof candidate.similarity === "number" && <span className="similarity">semantic match {Math.round(candidate.similarity * 100)}%</span>}
       </div>
-
-      <div className="signal-row">
-        {candidate.signals.map((signal) => <span key={signal}>{signal}</span>)}
-      </div>
-
+      <div className="signal-row">{candidate.signals.map((signal) => <span key={signal}>{signal}</span>)}</div>
       <div className="comparison-grid">
-        <div>
-          <span className="comparison-label">Source</span>
-          <p>{candidate.sourceText || "No close source fact found."}</p>
-        </div>
-        <div>
-          <span className="comparison-label">AVT</span>
-          <p>{candidate.avtText || "No close AVT wording found."}</p>
-        </div>
+        <div><span className="comparison-label">Source</span><p>{candidate.sourceText || "No close source fact found."}</p></div>
+        <div><span className="comparison-label">AVT</span><p>{candidate.avtText || "No close AVT wording found."}</p></div>
       </div>
-
       <div className="review-controls">
-        <button
-          className={`review-choice ${decision.status === "no-issue" ? "active" : ""}`}
-          onClick={() => onDecision(candidate, { status: "no-issue" })}
-        >
-          No issue
-        </button>
-
-        <select
-          className="category-select"
-          value={category}
-          onChange={(event) =>
-            onDecision(candidate, { status: decision.status === "approved" ? "approved" : "pending", category: event.target.value as ValidationCategory })
-          }
-        >
+        <button className={`review-choice ${decision.status === "no-issue" ? "active" : ""}`} onClick={() => onDecision(candidate, { status: "no-issue" })}>No issue</button>
+        <select className="category-select" value={category} onChange={(event) => onDecision(candidate, { status: decision.status === "approved" ? "approved" : "pending", category: event.target.value as ValidationCategory })}>
           {VALIDATION_CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
-
-        <button
-          className={`review-choice approve ${decision.status === "approved" ? "active" : ""}`}
-          onClick={() => onDecision(candidate, { status: "approved", category })}
-        >
-          Approve finding
-        </button>
+        <button className={`review-choice approve ${decision.status === "approved" ? "active" : ""}`} onClick={() => onDecision(candidate, { status: "approved", category })}>Approve finding</button>
       </div>
     </article>
   );
@@ -414,10 +355,5 @@ function humanDescription(category: ValidationCategory, candidate: ReviewCandida
   }
 }
 
-function stripStop(value: string) {
-  return value.trim().replace(/[.!?]+$/, "");
-}
-
-function slugify(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-}
+function stripStop(value: string) { return value.trim().replace(/[.!?]+$/, ""); }
+function slugify(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""); }
