@@ -1,16 +1,5 @@
-import type { GroundTruthExport } from "../utils/json";
-import type {
-  AvtComponentContent,
-  ValidationFinding,
-  ValidationResult
-} from "./types";
-
-export interface ValidationProvider {
-  validate(
-    groundTruth: GroundTruthExport,
-    avt: AvtComponentContent
-  ): Promise<ValidationResult>;
-}
+import type { ValidationProvider } from "./provider";
+import type { ValidationFinding } from "./types";
 
 function containsText(haystack: string, needle: string) {
   return haystack.toLowerCase().includes(needle.toLowerCase());
