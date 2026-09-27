@@ -15,9 +15,10 @@ export const mockValidationProvider: ValidationProvider = {
         findings.push({
           id: `MOCK-${index + 1}`,
           component: "History of Presenting Complaint",
-          category: "OMISSION",
+          category: "Omission",
           avtText: "",
           sourceText: fact.text,
+          sourceFactIds: [fact.id],
           description: "Source content not found in AVT output."
         });
       }
@@ -26,6 +27,7 @@ export const mockValidationProvider: ValidationProvider = {
     const correctFacts = Math.max(groundTruth.facts.length - findings.length, 0);
 
     return {
+      rubricVersion: "1.0",
       sourceFacts: groundTruth.facts.length,
       correctFacts,
       findings
