@@ -1,4 +1,3 @@
-import { pipeline } from "@huggingface/transformers";
 import type { GroundTruthExport } from "../utils/json";
 import type {
   AvtComponentContent,
@@ -7,6 +6,7 @@ import type {
 } from "./types";
 
 const MODEL_ID = "mixedbread-ai/mxbai-embed-xsmall-v1";
+const TRANSFORMERS_CDN = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1";
 const OMIT_THRESHOLD = 0.47;
 const REVIEW_THRESHOLD = 0.69;
 const ADDITION_THRESHOLD = 0.42;
@@ -41,24 +41,15 @@ export interface Level1Analysis {
 }
 
 type ProgressCallback = (message: string, percent?: number) => void;
+type Extractor = (texts: string[], options: { pooling: string; normalize: boolean }) => Promise<{ tolist(): number[][] }>;
+type AvtSentence = { id: string; component: FirstNetComponent; text: string };
+type SourceFact = { id: string; domain: string; text: string };
 
-type AvtSentence = {
-  id: string;
-  component: FirstNetComponent;
-  text: string;
-};
+let extractorPromise: Promise<Extractor> | null = null;
 
-type SourceFact = {
-  id: string;
-  domain: string;
-  text: string;
-};
-
-let extractorPromise: ReturnType<typeof createExtractor> | null = null;
-
-async function createExtractor(onProgress?: ProgressCallback) {
+async function createExtractor(onProgress?: ProgressCallback): Promise<Extractor> {
   const hasWebGpu = Boolean((navigator as Navigator & { gpu?: unknown }).gpu);
-  const device = (hasWebGpu ? "webgpu" : "wasm") as "webgpu" | "wasm";
+  const device = hasWebGpu ? "webgpu" : "wasm";
 
   onProgress?.(
     hasWebGpu
@@ -66,9 +57,14 @@ async function createExtractor(onProgress?: ProgressCallback) {
       : "WebGPU unavailable; loading local semantic matching model on CPU…"
   );
 
+  const dynamicImport = new Function("url", "return import(url)") as (url: string) => Promise<{
+    pipeline: (task: string, model: string, options: Record<string, unknown>) => Promise<Extractor>;
+  }>;
+  const { pipeline } = await dynamicImport(TRANSFORMERS_CDN);
+
   return pipeline("feature-extraction", MODEL_ID, {
     device,
-    progress_callback: (progress: { status?: string; progress?: number; file?: string }) => {
+    progress_callback: (progress: { progress?: number; file?: string }) => {
       if (typeof progress.progress === "number") {
         onProgress?.(
           progress.file ? `Loading ${progress.file}…` : "Loading semantic model…",
@@ -114,7 +110,7 @@ export async function analyseLevel1(
 
   const extractor = await getExtractor(onProgress);
   const output = await extractor(texts, { pooling: "mean", normalize: true });
-  const vectors = output.tolist() as number[][];
+  const vectors = output.tolist();
   const sourceVectors = vectors.slice(0, sourceFacts.length);
   const avtVectors = vectors.slice(sourceFacts.length);
 
@@ -123,10 +119,7 @@ export async function analyseLevel1(
 
   sourceFacts.forEach((fact, sourceIndex) => {
     const ranked = avtSentences
-      .map((sentence, avtIndex) => ({
-        sentence,
-        score: dot(sourceVectors[sourceIndex], avtVectors[avtIndex])
-      }))
+      .map((sentence, avtIndex) => ({ sentence, score: dot(sourceVectors[sourceIndex], avtVectors[avtIndex]) }))
       .sort((a, b) => b.score - a.score);
 
     const best = ranked[0];
@@ -148,13 +141,8 @@ export async function analyseLevel1(
       return;
     }
 
-    if (best.sentence.component !== expected && best.score >= REVIEW_THRESHOLD) {
-      signals.push("Possible wrong component");
-    }
-
-    if (best.score < REVIEW_THRESHOLD) {
-      signals.push("Possible semantic change");
-    }
+    if (best.sentence.component !== expected && best.score >= REVIEW_THRESHOLD) signals.push("Possible wrong component");
+    if (best.score < REVIEW_THRESHOLD) signals.push("Possible semantic change");
 
     const uniqueSignals = unique(signals);
     if (uniqueSignals.length > 0) {
@@ -176,10 +164,7 @@ export async function analyseLevel1(
 
   avtSentences.forEach((sentence, avtIndex) => {
     const bestSource = sourceFacts
-      .map((fact, sourceIndex) => ({
-        fact,
-        score: dot(avtVectors[avtIndex], sourceVectors[sourceIndex])
-      }))
+      .map((fact, sourceIndex) => ({ fact, score: dot(avtVectors[avtIndex], sourceVectors[sourceIndex]) }))
       .sort((a, b) => b.score - a.score)[0];
 
     if (bestSource && bestSource.score < ADDITION_THRESHOLD && meaningful(sentence.text)) {
@@ -210,24 +195,14 @@ export async function analyseLevel1(
     });
   });
 
-  return {
-    sourceFacts: sourceFacts.length,
-    likelyCaptured,
-    candidates: dedupeCandidates(candidates)
-  };
+  return { sourceFacts: sourceFacts.length, likelyCaptured, candidates: dedupeCandidates(candidates) };
 }
 
 function buildSourceFacts(groundTruth: GroundTruthExport): SourceFact[] {
-  const facts: SourceFact[] = groundTruth.facts.map((fact) => ({
-    id: fact.id,
-    domain: fact.domain,
-    text: fact.text
-  }));
-
+  const facts: SourceFact[] = groundTruth.facts.map((fact) => ({ id: fact.id, domain: fact.domain, text: fact.text }));
   splitSentences(groundTruth.additionalSpokenInformation).forEach((text, index) => {
     facts.push({ id: `additional-${index + 1}`, domain: "History", text });
   });
-
   return facts;
 }
 
@@ -235,54 +210,35 @@ function buildAvtSentences(avtOutput: AvtComponentContent): AvtSentence[] {
   const result: AvtSentence[] = [];
   Object.entries(avtOutput).forEach(([component, content]) => {
     splitSentences(content).forEach((text, index) => {
-      result.push({
-        id: `${slug(component)}-${index + 1}`,
-        component: component as FirstNetComponent,
-        text
-      });
+      result.push({ id: `${slug(component)}-${index + 1}`, component: component as FirstNetComponent, text });
     });
   });
   return result;
 }
 
 function splitSentences(text: string) {
-  return text
-    .replace(/^[•\-*]+\s*/gm, "")
-    .split(/\n+|(?<=[.!?;])\s+/)
-    .map((item) => item.trim())
-    .filter((item) => item.length >= 3);
+  return text.replace(/^[•\-*]+\s*/gm, "").split(/\n+|(?<=[.!?;])\s+/).map((item) => item.trim()).filter((item) => item.length >= 3);
 }
 
 function expectedComponent(domain: string): FirstNetComponent {
   if (domain === "Review of systems") return "Review of Systems";
-  if (["Examination", "Observations", "Investigations"].includes(domain)) {
-    return "Examination Findings";
-  }
-  if (["Plan / actions", "Team involvement"].includes(domain)) {
-    return "Plan and Requested Actions";
-  }
+  if (["Examination", "Observations", "Investigations"].includes(domain)) return "Examination Findings";
+  if (["Plan / actions", "Team involvement"].includes(domain)) return "Plan and Requested Actions";
   return "History of Presenting Complaint";
 }
 
 function compareProtectedAttributes(source: string, avt: string): ReviewSignal[] {
   const signals: ReviewSignal[] = [];
-
   const sourceNumbers = numbers(source);
   const avtNumbers = numbers(avt);
-  if (sourceNumbers.length > 0 && avtNumbers.length > 0 && !sameSet(sourceNumbers, avtNumbers)) {
-    signals.push("Number mismatch");
-  }
-
+  if (sourceNumbers.length > 0 && avtNumbers.length > 0 && !sameSet(sourceNumbers, avtNumbers)) signals.push("Number mismatch");
   if (hasNegation(source) !== hasNegation(avt)) signals.push("Negation mismatch");
-
   const sourceSide = laterality(source);
   const avtSide = laterality(avt);
   if (sourceSide && avtSide && sourceSide !== avtSide) signals.push("Laterality mismatch");
-
   const sourceTiming = timing(source);
   const avtTiming = timing(avt);
   if (sourceTiming && avtTiming && sourceTiming !== avtTiming) signals.push("Timing mismatch");
-
   return signals;
 }
 
@@ -295,74 +251,44 @@ function suggestCategory(signals: ReviewSignal[]): ValidationCategory | undefine
   return undefined;
 }
 
-function describeSignals(signals: ReviewSignal[]) {
-  if (signals.length === 1) return signals[0];
-  return signals.join("; ");
-}
-
+function describeSignals(signals: ReviewSignal[]) { return signals.length === 1 ? signals[0] : signals.join("; "); }
 function findDuplicates(sentences: AvtSentence[]) {
   const duplicates: Array<{ first: AvtSentence; second: AvtSentence }> = [];
   for (let i = 0; i < sentences.length; i += 1) {
     for (let j = i + 1; j < sentences.length; j += 1) {
       const first = normalize(sentences[i].text);
       const second = normalize(sentences[j].text);
-      if (first.length >= 12 && first === second) {
-        duplicates.push({ first: sentences[i], second: sentences[j] });
-      }
+      if (first.length >= 12 && first === second) duplicates.push({ first: sentences[i], second: sentences[j] });
     }
   }
   return duplicates;
 }
-
-function numbers(text: string) {
-  return text.match(/\b\d+(?:\.\d+)?\b/g) ?? [];
-}
-
-function hasNegation(text: string) {
-  return /\b(no|not|never|none|denies|denied|without|negative for|hasn't|haven't|didn't|doesn't)\b/i.test(text);
-}
-
+function numbers(text: string) { return text.match(/\b\d+(?:\.\d+)?\b/g) ?? []; }
+function hasNegation(text: string) { return /\b(no|not|never|none|denies|denied|without|negative for|hasn't|haven't|didn't|doesn't)\b/i.test(text); }
 function laterality(text: string) {
   if (/\bleft\b/i.test(text)) return "left";
   if (/\bright\b/i.test(text)) return "right";
   if (/\bbilateral\b|\bboth\b/i.test(text)) return "bilateral";
   return "";
 }
-
 function timing(text: string) {
-  const match = text.toLowerCase().match(
-    /\b(?:today|yesterday|tonight|this morning|this afternoon|\d+\s*(?:hour|hours|day|days|week|weeks|month|months|year|years))\b/
-  );
+  const match = text.toLowerCase().match(/\b(?:today|yesterday|tonight|this morning|this afternoon|\d+\s*(?:hour|hours|day|days|week|weeks|month|months|year|years))\b/);
   return match?.[0] ?? "";
 }
-
 function sameSet(a: string[], b: string[]) {
-  return a.length === b.length && [...a].sort().every((value, index) => value === [...b].sort()[index]);
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.length === sortedB.length && sortedA.every((value, index) => value === sortedB[index]);
 }
-
 function dot(a: number[], b: number[]) {
   let total = 0;
-  const length = Math.min(a.length, b.length);
-  for (let i = 0; i < length; i += 1) total += a[i] * b[i];
+  for (let i = 0; i < Math.min(a.length, b.length); i += 1) total += a[i] * b[i];
   return total;
 }
-
-function meaningful(text: string) {
-  return normalize(text).split(" ").filter(Boolean).length >= 3;
-}
-
-function normalize(text: string) {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function slug(text: string) {
-  return normalize(text).replace(/\s+/g, "-");
-}
-
-function unique<T>(items: T[]) {
-  return Array.from(new Set(items));
-}
-
+function meaningful(text: string) { return normalize(text).split(" ").filter(Boolean).length >= 3; }
+function normalize(text: string) { return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+function slug(text: string) { return normalize(text).replace(/\s+/g, "-"); }
+function unique<T>(items: T[]) { return Array.from(new Set(items)); }
 function dedupeCandidates(candidates: ReviewCandidate[]) {
   const seen = new Set<string>();
   return candidates.filter((candidate) => {
