@@ -4,12 +4,12 @@ import { hasExactPhraseOverlap, keywordOverlap, matchingTerms, phraseMatchScore 
 import { hasNegationWarning } from "./negation";
 import { compareNumbers } from "./numberMatching";
 import { classifyTranscriptStatement, statementTypeCompatibility } from "./statementType";
+import { expandTerminology } from "./terminology";
+import { evidenceWarnings } from "./warnings";
 import { classifyRelationships } from "./nli";
 
 type ProgressCallback = (message: string, percent?: number) => void;
 export const MIN_SEMANTIC_MATCH_THRESHOLD = 0.42;
-export const NLI_LIKELY_COVERED_ENTAILMENT = 0.58;
-export const NLI_UNCERTAIN_ENTAILMENT = 0.3;
 export const SEMANTIC_WEIGHT = 0.34;
 export const LEXICAL_WEIGHT = 0.28;
 export const PHRASE_MATCH_WEIGHT = 0.34;
@@ -36,27 +36,23 @@ export interface TranscriptComparison {
 export async function compareTranscriptAndAvt(
   claims: AVTClaim[],
   chunks: TranscriptEvidenceChunk[],
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  runtime = { embedTexts, classifyRelationships }
 ): Promise<TranscriptComparison> {
   if (!claims.length || !chunks.length) return { matches: {}, omissionCandidates: [] };
 
-  let semanticMatrix: number[][] | null = null;
-  try {
-    onProgress?.("Loading local MiniLM embedding model", 0);
-    const vectors = await embedTexts(
-      [...claims.map((claim) => claim.text), ...chunks.map((chunk) => chunk.text)],
-      onProgress
-    );
-    semanticMatrix = claims.map((_, claimIndex) => chunks.map((_, chunkIndex) =>
-      cosineSimilarity(vectors[claimIndex], vectors[claims.length + chunkIndex])
-    ));
-  } catch {
-    onProgress?.("Embedding model unavailable; using deterministic local retrieval");
-  }
-
-  const allMatches: EvidenceMatch[][] = claims.map((claim, claimIndex) => chunks.map((chunk, chunkIndex) =>
-    buildMatch(claim, chunk, semanticMatrix?.[claimIndex]?.[chunkIndex] ?? 0)
-  ));
+  // Start independent lexical/structured work alongside model loading/embedding.
+  const [vectors, lexicalMatrix] = await Promise.all([
+    runtime.embedTexts([...claims.map(c => c.text), ...chunks.map(c => c.text)], onProgress).catch(() => {
+      onProgress?.("Embedding model unavailable; using local lexical retrieval"); return null;
+    }),
+    Promise.resolve().then(() => claims.map(claim => chunks.map(chunk => buildMatch(claim, chunk, 0))))
+  ]);
+  const semanticMatrix = vectors ? claims.map((_, i) => chunks.map((_, j) => cosineSimilarity(vectors[i], vectors[claims.length + j]))) : null;
+  const allMatches = lexicalMatrix.map((row, i) => row.map((match, j) => ({ ...match,
+    semanticSimilarity: semanticMatrix?.[i][j] ?? 0,
+    rankScore: match.rankScore + (semanticMatrix?.[i][j] ?? 0) * SEMANTIC_WEIGHT
+  })));
 
   onProgress?.("Checking likely evidence relationships", 70);
   const debugClaimPools = new Map<string, ReturnType<typeof selectNliCandidates>>();
@@ -83,8 +79,8 @@ export async function compareTranscriptAndAvt(
   const nliBatchSize = 12;
   for (let offset = 0; offset < pairsToJudge.length; offset += nliBatchSize) {
     const batch = pairsToJudge.slice(offset, offset + nliBatchSize);
-    const relationships = await classifyRelationships(batch.map(([claimIndex, chunkIndex]) => ({
-      premise: [chunks[chunkIndex].text, chunks[chunkIndex].contextText].filter(Boolean).join("\n"),
+    const relationships = await runtime.classifyRelationships(batch.map(([claimIndex, chunkIndex]) => ({
+      premise: chunks[chunkIndex].text,
       hypothesis: claims[claimIndex].text
     })), onProgress);
     batch.forEach(([claimIndex, chunkIndex], batchIndex) => {
@@ -114,7 +110,7 @@ export async function compareTranscriptAndAvt(
       .filter(isPlausibleMatch).slice(0, 3)
   ]));
 
-  if (import.meta.env.DEV) {
+  if (import.meta.env?.DEV) {
     claims.forEach((claim, claimIndex) => {
       const pool = debugClaimPools.get(claim.id) ?? [];
       const selected = new Set(pool.map(({ index }) => index));
@@ -124,10 +120,12 @@ export async function compareTranscriptAndAvt(
         claim: claim.text,
         semanticCandidates: allMatches[claimIndex].map((match, index) => ({ match, index })).sort((a, b) => b.match.semanticSimilarity - a.match.semanticSimilarity).slice(0, SEMANTIC_CANDIDATES),
         lexicalCandidates: allMatches[claimIndex].map((match, index) => ({ match, index })).sort((a, b) => b.match.rankScore - a.match.rankScore).filter(({ match }) => match.keywordOverlap >= MIN_LEXICAL_CANDIDATE_SCORE || match.phraseMatchScore > 0).slice(0, LEXICAL_CANDIDATES),
+        terminologyExpandedQuery: expandTerminology(claim.text),
+        terminologyExpandedCandidates: pool.filter(({ sources }) => sources.includes("lexical")).map(({ index }) => ({ id: chunks[index].id, text: expandTerminology(chunks[index].text) })),
         structuredCandidates: allMatches[claimIndex].map((match, index) => ({ match, index })).filter(({ match }) => match.matchingNumbers.length > 0).slice(0, MAX_NLI_CANDIDATES),
         union: pool.map(({ index, sources }) => ({ sources, match: allMatches[claimIndex][index] })),
         nli: ranked.filter(({ index }) => selected.has(index)).map(({ match }) => ({ id: match.transcriptChunkId, nli: match.nli })),
-        finalRanking: ranked.map(({ match, accepted }) => ({ id: match.transcriptChunkId, score: match.rankScore, accepted, rejectionReason: accepted ? undefined : getRejectionReason(match) }))
+        finalRanking: ranked.map(({ match, accepted }) => ({ id: match.transcriptChunkId, score: match.rankScore, warnings: evidenceWarnings(claim, chunks.find(c => c.id === match.transcriptChunkId)!, match), accepted, rejectionReason: accepted ? undefined : getRejectionReason(match) }))
       });
     });
   }
@@ -137,10 +135,19 @@ export async function compareTranscriptAndAvt(
       claim,
       match: allMatches[claimIndex][chunkIndex]
     })).sort((a, b) => b.match.rankScore - a.match.rankScore);
+    if (import.meta.env?.DEV) {
+      const pool = selectNliCandidates(claims.map((_, i) => allMatches[i][chunkIndex]), semanticMatrix !== null);
+      console.debug("[TranscriptAVT reverse retrieval]", {
+        query: chunk.text, terminologyExpandedQuery: expandTerminology(chunk.text),
+        semanticCandidates: pool.filter(p => p.sources.includes("semantic")),
+        lexicalCandidates: pool.filter(p => p.sources.includes("lexical")),
+        terminologyExpandedCandidates: pool.filter(p => p.sources.includes("lexical")).map(p => expandTerminology(claims[p.index].text)),
+        structuredCandidates: pool.filter(p => p.sources.includes("structured")), candidateUnion: pool,
+        finalRanking: ranked.map(({claim,match}) => ({claimId:claim.id,nli:match.nli,score:match.rankScore,warnings:evidenceWarnings(claim,chunk,match),rejectionReason:isPlausibleMatch(match)?undefined:getRejectionReason(match)}))
+      });
+    }
     const plausible = ranked.filter((item) => isPlausibleMatch(item.match)).slice(0, 3);
     const best = plausible[0];
-    const coverageState = getCoverageState(best?.match);
-    const likelyCovered = coverageState === "likely_covered";
     return [{
       itemId: `omission-${chunk.id}`,
       transcriptChunkId: chunk.id,
@@ -152,8 +159,6 @@ export async function compareTranscriptAndAvt(
       matchDetails: plausible.map(({ match }) => match),
       startLine: chunk.startLine,
       endLine: chunk.endLine,
-      likelyCovered,
-      coverageState,
       originalTurnText: chunk.originalTurnText,
       contextText: chunk.contextText
     }];
@@ -169,8 +174,6 @@ function omissionPriority(candidate: OmissionCandidate) {
     match.negationWarning || match.conflictingNumbers.length > 0 || (match.contradiction ?? 0) >= 0.3);
   if (hasConflict) return 1;
   if (candidate.matches.some((match) => (match.neutral ?? 0) >= 0.6)) return 2;
-  if (candidate.coverageState === "uncertain") return 3;
-  if (candidate.coverageState === "likely_uncovered") return 4;
   return 5;
 }
 
@@ -194,14 +197,13 @@ function toTranscriptAvtMatch(transcriptUnitId: string, claim: AVTClaim, match: 
   };
 }
 
-function buildMatch(claim: AVTClaim, chunk: TranscriptEvidenceChunk, semanticSimilarity: number): EvidenceMatch {
-  const retrievalText = [chunk.text, chunk.contextText].filter(Boolean).join("\n");
+export function buildMatch(claim: AVTClaim, chunk: TranscriptEvidenceChunk, semanticSimilarity: number): EvidenceMatch {
+  const retrievalText = chunk.text;
   const overlap = keywordOverlap(claim.text, retrievalText);
   const matchedTerms = matchingTerms(claim.text, retrievalText);
   const preliminaryNumberResult = compareNumbers(claim.text, retrievalText);
   const phraseScore = phraseMatchScore(claim.text, retrievalText);
   const exactPhraseOverlap = hasExactPhraseOverlap(claim.text, retrievalText);
-  const topical = isTopicallyRelated({ semanticSimilarity, keywordOverlap: overlap, matchedTerms, exactPhraseOverlap, matchingNumbers: preliminaryNumberResult.matchingNumbers }, semanticSimilarity);
   const sameAttribute = matchedTerms.some((term) => !GENERIC_TOPICAL_TOKENS.has(term)) || exactPhraseOverlap;
   const numberResult = sameAttribute ? preliminaryNumberResult : { matchingNumbers: [], conflictingNumbers: [] };
   const negationWarning = sameAttribute && hasNegationWarning(claim.text, chunk.text, true);
@@ -224,19 +226,6 @@ function buildMatch(claim: AVTClaim, chunk: TranscriptEvidenceChunk, semanticSim
     exactPhraseOverlap,
     rankScore: initialRankScore
   };
-}
-
-function getCoverageState(match?: EvidenceMatch): "likely_covered" | "uncertain" | "likely_uncovered" {
-  if (!match) return "likely_uncovered";
-  if ((match.nli?.entailment ?? 0) >= NLI_LIKELY_COVERED_ENTAILMENT
-    && (match.nli?.contradiction ?? 0) < 0.25
-    && !match.negationWarning
-    && match.conflictingNumbers.length === 0) return "likely_covered";
-  if ((match.nli?.entailment ?? 0) >= NLI_UNCERTAIN_ENTAILMENT
-    || (match.nli?.neutral ?? 1) < 0.8
-    || match.negationWarning
-    || match.conflictingNumbers.length > 0) return "uncertain";
-  return "likely_uncovered";
 }
 
 function isPlausibleMatch(match: EvidenceMatch) {
@@ -264,7 +253,7 @@ function isPlausibleMatch(match: EvidenceMatch) {
     || match.conflictingNumbers.length > 0 && match.keywordOverlap > 0;
 }
 
-function selectNliCandidates(matches: EvidenceMatch[], hasEmbeddings: boolean) {
+export function selectNliCandidates(matches: EvidenceMatch[], hasEmbeddings: boolean) {
   const sources = new Map<number, Set<string>>();
   const mark = (index: number, source: string) => {
     const current = sources.get(index) ?? new Set<string>();
@@ -288,12 +277,10 @@ function selectNliCandidates(matches: EvidenceMatch[], hasEmbeddings: boolean) {
     .slice(0, MAX_NLI_CANDIDATES)
     .forEach(({ index }) => mark(index, "structured"));
 
-  // Preserve representation from all three retrievers first, then fill by
-  // combined pre-NLI rank. The candidate cap prevents Cartesian NLI work.
+  // Union every independently capped pool; never let one channel evict another.
   const ranked = Array.from(sources.keys())
     .map((index) => ({ index, match: matches[index] }))
-    .sort((a, b) => b.match.rankScore - a.match.rankScore)
-    .slice(0, MAX_NLI_CANDIDATES);
+    .sort((a, b) => b.match.rankScore - a.match.rankScore);
   return ranked.map((candidate) => ({ ...candidate, sources: Array.from(sources.get(candidate.index) ?? []) }));
 }
 

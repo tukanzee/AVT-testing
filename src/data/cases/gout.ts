@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const goutCase: ClinicalCase = {
-  id: "SCEN-10",
+  id: "SCEN-8",
   title: "Acute gout",
   specialty: "Rheumatology / Emergency Medicine",
   setting: "Emergency Department",

@@ -1,6 +1,7 @@
+import { atomicPropositions } from "../claimExtraction/atomic";
 import type { ParsedTranscriptLine, TranscriptComparisonUnit } from "../workflowTypes";
 
-const SHORT_RESPONSE = /^(?:yes|no|never|sometimes|occasionally|not really|none|i don'?t know|okay|ok|sure)[,.! ]*$/i;
+const FILLER = /^(?:okay|ok|sure|right|thank you|thanks|no problem|nice to meet you|all right|alright)[,.! ]*$/i;
 const ACTION_VERBS = [
   "start", "continue", "monitor", "check", "take", "obtain", "repeat", "insert",
   "investigate", "refer", "admit", "discuss", "escalate", "replace", "review", "arrange",
@@ -17,31 +18,21 @@ export function createEvidenceChunks(lines: ParsedTranscriptLine[]): TranscriptC
     const parentTurnId = `turn-${turnIndex + 1}`;
 
     if (isQuestion(turn) && next && next.speaker !== "clinician") {
-      const answerSentences = splitSentences(next.text);
-      const firstAnswer = answerSentences.shift() ?? next.text;
       units.push(makeUnit({
         turn: next,
         parentTurnId: `turn-${turnIndex + 2}`,
-        text: `${turn.speakerLabel}: ${turn.text}\n${next.speakerLabel}: ${firstAnswer}`,
+        text: `${turn.speakerLabel}: ${turn.text}\n${next.speakerLabel}: ${next.text}`,
         originalTurnText: next.text,
         startLine: turn.lineNumber,
         rawLines: [turn.raw, next.raw],
         contextText: `${turn.speakerLabel}: ${turn.text}`,
         unitIndex: units.length
       }));
-      answerSentences.forEach((sentence) => units.push(makeUnit({
-        turn: next,
-        parentTurnId: `turn-${turnIndex + 2}`,
-        text: sentence,
-        originalTurnText: next.text,
-        startLine: next.lineNumber,
-        rawLines: [next.raw],
-        contextText: `${turn.speakerLabel}: ${turn.text}`,
-        unitIndex: units.length
-      })));
       turnIndex += 1;
       continue;
     }
+
+    if (isFiller(turn.text)) continue;
 
     splitTurn(turn).forEach((text) => units.push(makeUnit({
       turn,
@@ -63,20 +54,9 @@ function surroundingContext(lines: ParsedTranscriptLine[], index: number) {
     .map((line) => `${line.speakerLabel}: ${line.text}`).join("\n");
 }
 
-export function isLikelyClinicalChunk(unit: TranscriptComparisonUnit) {
-  const text = unit.text.toLowerCase().replace(/\[[^\]]+\]/g, "").replace(/^(?:c|p|p\/c):\s*/gm, " ").trim();
-  if (text.length < 4) return false;
-  if (/^(?:hello|hi|thank you|thanks|okay|ok|sure|nice to meet you|that's fine|thats fine|goodbye|bye)[.! ]*$/i.test(text)) return false;
-  if (/^(?:hello|hi)\b.*\b(?:doctor|doctors|ed|emergency department)\b/i.test(text)) return false;
-  if (/\b(?:what(?:'s| is) your name|confirm your name|my name is|date of birth|dob)\b/i.test(text)) return false;
-  if (/^(?:can you |could you )?(?:lie down|sit down|come in|take a seat|move over|turn around)(?: please)?[?.! ]*$/i.test(text)) return false;
-  if (/\b(?:microphone|recording|equipment|sound check|test recording|before we start)\b/i.test(text)) return false;
-  return true;
-}
-
 function splitTurn(turn: ParsedTranscriptLine) {
   return splitSentences(turn.text).flatMap((sentence) =>
-    turn.speaker === "clinician" ? splitClinicalActions(sentence) : [sentence]
+    turn.speaker === "clinician" ? splitClinicalActions(sentence).flatMap(atomicPropositions) : atomicPropositions(sentence)
   );
 }
 
@@ -111,20 +91,20 @@ function makeUnit(args: {
   unitIndex: number;
 }): TranscriptComparisonUnit {
   const speaker = args.turn.speaker === "clinician" ? "C" : args.turn.speaker === "patient" ? "P" : "P/C";
-  const prefixed = /^(?:C|P|P\/C):/m.test(args.text) ? args.text : `${speaker}: ${args.text}`;
+  const prefixed = /^(?:C|P|P\/C):/m.test(args.text) ? args.text : `${args.turn.speakerLabel}: ${args.text}`;
   return {
     id: `transcript-unit-${args.unitIndex + 1}`,
     speaker,
     text: prefixed,
     originalTurnText: args.originalTurnText,
     startLine: args.startLine,
-    endLine: args.turn.lineNumber,
+    endLine: args.turn.endLine ?? args.turn.lineNumber,
     parentTurnId: args.parentTurnId,
     contextText: args.contextText,
     rawLines: args.rawLines
   };
 }
 
-export function isShortResponse(text: string) {
-  return SHORT_RESPONSE.test(text.trim());
+export function isFiller(text: string) {
+  return FILLER.test(text.trim());
 }

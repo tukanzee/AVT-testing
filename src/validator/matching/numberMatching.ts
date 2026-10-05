@@ -5,6 +5,7 @@ const NUMBER_WORDS: Record<string, string> = {
 
 export function extractNumbers(text: string) {
   const normalizedText = text.toLowerCase()
+    .replace(/\bhalf an hour\b/g, "30 minutes")
     .replace(/\b(\d+(?:\.\d+)?)\s+over\s+(\d+(?:\.\d+)?)\b/g, "$1/$2")
     .replace(/\b(\d+(?:\.\d+)?)\s+(?:to|or)\s+(\d+(?:\.\d+)?)\b/g, "$1–$2")
     .replace(/\b(six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+(?:to|or|[-–])\s+(six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/g, (_match, first: string, second: string) => `${NUMBER_WORDS[first]}–${NUMBER_WORDS[second]}`)

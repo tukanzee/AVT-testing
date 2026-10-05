@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const biliaryColicCase: ClinicalCase = {
-  id: "SCEN-04",
+  id: "SCEN-2",
   title: "Biliary colic",
   specialty: "Gastroenterology / Emergency Medicine",
   setting: "Emergency Department",

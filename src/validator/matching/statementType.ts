@@ -1,6 +1,7 @@
 import type { AVTClaim, StatementType, TranscriptComparisonUnit } from "../workflowTypes";
 
 export function classifyTranscriptStatement(text: string): StatementType {
+  if (/\n(?:P|Patient):/i.test(text)) return "patient_history";
   if (/^\s*C:\s*(?:do you|have you|has the patient|how|what|when|where|why|can you|could you|are you|is there)\b|\?\s*(?:\n|$)/i.test(text)) {
     return "clinician_question";
   }
@@ -17,7 +18,7 @@ export function classifyTranscriptStatement(text: string): StatementType {
 export function classifyClaimStatement(claim: AVTClaim): StatementType {
   if (claim.section === "Plan and Requested Actions") return "clinician_plan";
   if (claim.section === "Examination Findings") return "examination_finding";
-  return "other";
+  return "patient_history";
 }
 
 export function statementTypeCompatibility(unit: TranscriptComparisonUnit, claim: AVTClaim) {

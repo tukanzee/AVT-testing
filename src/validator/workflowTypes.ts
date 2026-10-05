@@ -2,6 +2,7 @@ export type SpeakerRole = "clinician" | "patient" | "uncertain";
 
 export interface ParsedTranscriptLine {
   lineNumber: number;
+  endLine?: number;
   speaker: SpeakerRole;
   speakerLabel: string;
   text: string;
@@ -67,7 +68,8 @@ export interface ValidationDecision {
   correctSupported: boolean;
   categories: import("./types").ValidationCategory[];
   comment: string;
-  transcriptChunkId?: string;
+  transcriptChunkIds?: string[];
+  skipped?: boolean;
 }
 
 export interface OmissionDecision {
@@ -77,6 +79,8 @@ export interface OmissionDecision {
   categories: import("./types").ValidationCategory[];
   comment: string;
   avtClaimId?: string;
+  irrelevant?: boolean;
+  skipped?: boolean;
 }
 
 export interface TranscriptAVTMatch {
@@ -116,8 +120,6 @@ export interface OmissionCandidate {
   matchDetails: EvidenceMatch[];
   startLine: number;
   endLine: number;
-  likelyCovered: boolean;
-  coverageState: "likely_covered" | "uncertain" | "likely_uncovered";
   originalTurnText: string;
   contextText?: string;
 }

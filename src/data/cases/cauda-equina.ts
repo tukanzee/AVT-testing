@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const caudaEquinaCase: ClinicalCase = {
-  id: "SCEN-19",
+  id: "SCEN-3",
   title: "Cauda equina syndrome",
   specialty: "Orthopaedics / Emergency Medicine",
   setting: "Emergency Department",

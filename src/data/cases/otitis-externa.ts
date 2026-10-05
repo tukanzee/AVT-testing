@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const otitisExternaCase: ClinicalCase = {
-  id: "SCEN-09",
+  id: "SCEN-12",
   title: "Otitis externa",
   specialty: "ENT / Emergency Medicine",
   setting: "Emergency Department",

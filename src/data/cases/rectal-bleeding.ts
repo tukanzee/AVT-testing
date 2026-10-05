@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const rectalBleedingCase: ClinicalCase = {
-  id: "SCEN-16",
+  id: "SCEN-15",
   title: "Rectal bleeding with altered bowel habit",
   specialty: "Gastroenterology / Emergency Medicine",
   setting: "Emergency Department",

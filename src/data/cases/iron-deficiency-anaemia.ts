@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const ironDeficiencyAnaemiaCase: ClinicalCase = {
-  id: "SCEN-17",
+  id: "SCEN-9",
   title: "Symptomatic iron-deficiency anaemia",
   specialty: "Haematology / Emergency Medicine",
   setting: "Emergency Department",

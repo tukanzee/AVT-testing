@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const recurrentFallsCase: ClinicalCase = {
-  id: "SCEN-13",
+  id: "SCEN-16",
   title: "Recurrent falls with postural hypotension",
   specialty: "Geriatrics / Emergency Medicine",
   setting: "Emergency Department",

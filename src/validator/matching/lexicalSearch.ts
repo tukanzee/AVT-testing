@@ -1,8 +1,9 @@
+import { expandTerminology } from "./terminology";
 const STOP_WORDS = new Set([
   "the", "and", "with", "that", "this", "from", "have", "has", "had", "was", "were", "are", "for", "you", "your", "patient", "reports", "reported", "does", "did", "not", "other", "since", "about"
 ]);
 
-const IRREGULAR = new Map([["injuries", "injury"], ["allergies", "allergy"], ["falls", "fall"], ["episodes", "episode"]]);
+const IRREGULAR = new Map([["injuries", "injury"], ["allergies", "allergy"], ["falls", "fall"], ["episodes", "episode"], ["missed", "miss"], ["miss", "miss"], ["denies", "deny"]]);
 const MAX_PHRASE_TOKENS = 4;
 const PHRASE_SCORE_NORMALIZER = 3;
 
@@ -21,7 +22,7 @@ export function normalizeSearchToken(token: string) {
 }
 
 export function searchTokens(text: string) {
-  const expanded = text.toLowerCase().replace(/\bhr\b/g, "heart rate").replace(/\bbp\b/g, "blood pressure").replace(/\bspo2\b/g, "oxygen saturation").replace(/-/g, " ");
+  const expanded = expandTerminology(text).replace(/\bhr\b/g, "heart rate").replace(/\bbp\b/g, "blood pressure").replace(/\bspo2\b/g, "oxygen saturation").replace(/-/g, " ");
   return Array.from(new Set((expanded.match(/[a-z][a-z0-9]*/g) ?? [])
     .map((token) => normalizeSearchToken(token))
     .filter((token) => token.length > 2 && !STOP_WORDS.has(token))));
@@ -29,10 +30,29 @@ export function searchTokens(text: string) {
 
 export function lexicalSearchScore(query: string, document: string) {
   const queryTokens = searchTokens(query);
-  const documentTokens = new Set(searchTokens(document));
+  const documentTokens = searchTokens(document);
+  const rawQueryTokens = rawTokens(query);
+  const rawDocumentTokens = rawTokens(document);
   if (!queryTokens.length) return { score: 0, matchedTerms: [] as string[] };
-  const matchedTerms = queryTokens.filter((token) => documentTokens.has(token));
-  return { score: matchedTerms.length / queryTokens.length, matchedTerms };
+  const normalizedQuery = normalizeSearchText(expandTerminology(query));
+  const normalizedDocument = normalizeSearchText(expandTerminology(document));
+  const directSubstring = normalizedQuery.length >= 3 && normalizedDocument.includes(normalizedQuery);
+  const expandedMatches = queryTokens.filter((queryToken) => documentTokens.some((documentToken) =>
+    documentToken === queryToken
+    || queryToken.length >= 3 && documentToken.startsWith(queryToken)
+    || documentToken.length >= 3 && queryToken.startsWith(documentToken)
+  ));
+  const rawMatches = rawQueryTokens.filter((queryToken) => rawDocumentTokens.some((documentToken) =>
+    documentToken === queryToken || queryToken.length >= 3 && documentToken.startsWith(queryToken)
+  ));
+  const matchedTerms = Array.from(new Set([...expandedMatches, ...rawMatches]));
+  return { score: directSubstring ? 1 : Math.min(1, matchedTerms.length / queryTokens.length), matchedTerms };
+}
+
+function rawTokens(text: string) {
+  return (normalizeSearchText(text).match(/[a-z][a-z0-9]*/g) ?? [])
+    .map(normalizeSearchToken)
+    .filter((token) => token.length > 2 && !STOP_WORDS.has(token));
 }
 
 export function keywordOverlap(query: string, document: string) {

@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const pyelonephritisCase: ClinicalCase = {
-  id: "SCEN-11",
+  id: "SCEN-14",
   title: "Acute pyelonephritis",
   specialty: "Nephrology / Emergency Medicine",
   setting: "Emergency Department",

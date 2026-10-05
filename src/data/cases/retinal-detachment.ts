@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const retinalDetachmentCase: ClinicalCase = {
-  id: "SCEN-12",
+  id: "SCEN-17",
   title: "Suspected retinal detachment",
   specialty: "Ophthalmology / Emergency Medicine",
   setting: "Emergency Department",

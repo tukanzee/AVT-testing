@@ -1,6 +1,6 @@
 import type { ParsedTranscriptLine, SpeakerRole } from "../workflowTypes";
 
-const SPEAKER_LINE = /^\s*(C|P|P\s*\/\s*C|Clinician|Doctor|Patient)\s*:\s*(.*)$/i;
+const SPEAKER_LINE = /^\s*(C|P|P\s*\/\s*C|Clinician|Doctor|Patient|Mum|Dad|Mother|Father|Carer|Child)\s*:\s*(.*)$/i;
 
 export function parseTranscript(text: string): ParsedTranscriptLine[] {
   const parsed: ParsedTranscriptLine[] = [];
@@ -13,6 +13,7 @@ export function parseTranscript(text: string): ParsedTranscriptLine[] {
     if (!match) {
       const previous = parsed.at(-1);
       if (previous) {
+        previous.endLine = index + 1;
         previous.text = `${previous.text} ${trimmed}`.trim();
         previous.raw = `${previous.raw}\n${raw}`;
       } else {
@@ -31,7 +32,7 @@ export function parseTranscript(text: string): ParsedTranscriptLine[] {
     parsed.push({
       lineNumber: index + 1,
       speaker,
-      speakerLabel: speaker === "clinician" ? "C" : speaker === "patient" ? "P" : "P/C",
+      speakerLabel: match[1],
       text: match[2].trim(),
       raw
     });

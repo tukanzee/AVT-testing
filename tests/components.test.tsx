@@ -1,0 +1,31 @@
+import React from 'react';
+import assert from 'node:assert/strict';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ClaimReview from '../src/validator/components/ClaimReview';
+import OmissionReview from '../src/validator/components/OmissionReview';
+import TranscriptContextViewer, { nextLinkedIndex } from '../src/validator/components/TranscriptContextViewer';
+import { createEvidenceChunks } from '../src/validator/transcript/createEvidenceChunks';
+import { parseTranscript } from '../src/validator/transcript/parseTranscript';
+export function testComponents() {
+ const chunks=createEvidenceChunks(parseTranscript('P: No fever.'));
+ const claim={id:'c',section:'History of Presenting Complaint' as const,text:'No fever',originalSentence:'No fever'};
+ const html=renderToStaticMarkup(<ClaimReview claim={claim} chunks={chunks} candidates={[]} position={1} total={1} reviewed={0} onDecision={()=>{}} onPrevious={()=>{}} onNext={()=>{}} onToggleCategory={()=>{}} onToggleSupported={()=>{}} onSkip={()=>{}} />);
+ for (const label of ['Best transcript evidence','Other possible evidence','Search transcript','Transcript context','Linked evidence','Skip / come back later','UNREVIEWED','No strong transcript evidence found.']) assert.ok(html.includes(label),label);
+ assert.ok(!html.includes('View context'));
+ assert.ok(!html.includes('Possible change in history'));
+ assert.ok(!html.includes('Weak / unrelated'));
+ assert.match(html,/disabled=""[^>]*>✓ Correct \/ supported/);
+ assert.equal((html.match(/data-category=/g)??[]).length,9);
+ const residual=renderToStaticMarkup(<OmissionReview candidate={{itemId:'omission-transcript-unit-1',transcriptChunkId:'transcript-unit-1',transcriptText:'P: No fever.',retrievalSimilarity:0,matches:[],matchDetails:[],startLine:1,endLine:1,originalTurnText:'No fever.'}} claims={[claim]} chunks={chunks} position={1} total={1} reviewed={0} onDecision={()=>{}} onPrevious={()=>{}} onNext={()=>{}} onSkip={()=>{}} />);
+ assert.ok(residual.includes('Irrelevant / does not need documenting'));
+ assert.ok(residual.includes('Search AVT')); assert.ok(residual.includes('Save relevant / finding'));
+ assert.ok(residual.includes('Transcript context')); assert.ok(residual.includes('Suggested AVT match'));
+ const linkedChunks=createEvidenceChunks(parseTranscript('P: First evidence.\nP: Context between.\nP: Second evidence.'));
+ const viewer=renderToStaticMarkup(<TranscriptContextViewer chunks={linkedChunks} currentUnitId={linkedChunks[0].id} linkedUnitIds={[linkedChunks[0].id,linkedChunks[2].id]} onToggleEvidence={()=>{}} />);
+ assert.equal((viewer.match(/linked-unit/g)??[]).length,2);
+ assert.ok(viewer.includes('Previous linked evidence')); assert.ok(viewer.includes('Next linked evidence'));
+ assert.equal((viewer.match(/Unlink evidence/g)??[]).length,2);
+ assert.equal(nextLinkedIndex(0,1,2),1); assert.equal(nextLinkedIndex(1,1,2),0);
+ assert.equal(nextLinkedIndex(0,-1,2),1);
+ console.log('PASS review component rendering, visible search, initial state and category controls');
+}

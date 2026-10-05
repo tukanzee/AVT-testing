@@ -1,93 +1,74 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
-import { lexicalSearchScore, normalizeSearchToken } from "../matching/lexicalSearch";
-import type { EvidenceMatch, TranscriptAvtSection, TranscriptEvidenceChunk } from "../workflowTypes";
+import { useMemo, useState } from "react";
+import { lexicalSearchScore } from "../matching/lexicalSearch";
+import { evidenceWarnings } from "../matching/warnings";
+import type { AVTClaim, EvidenceMatch, TranscriptEvidenceChunk } from "../workflowTypes";
 
 type Props = {
+  claim: AVTClaim;
   candidates: EvidenceMatch[];
   chunks: TranscriptEvidenceChunk[];
-  claimSection: TranscriptAvtSection;
-  selectedChunkId?: string;
-  onSelect: (chunkId: string) => void;
+  selectedChunkIds: string[];
+  onToggleEvidence: (id: string) => void;
 };
 
-export default function EvidencePanel({ candidates, chunks, claimSection, selectedChunkId, onSelect }: Props) {
+export default function EvidencePanel({ claim, candidates, chunks, selectedChunkIds, onToggleEvidence }: Props) {
   const [search, setSearch] = useState("");
-  const suggestedId = selectedChunkId ?? candidates[0]?.transcriptChunkId;
-  const selectedChunk = chunks.find((chunk) => chunk.id === suggestedId);
-  const selectedMatch = candidates.find((match) => match.transcriptChunkId === suggestedId);
-  const searchResults = useMemo(() => {
-    if (!search.trim()) return [];
-    return chunks.map((chunk) => ({ chunk, score: lexicalSearchScore(search, chunk.text).score }))
-      .filter(({ score }) => score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8)
-      .map(({ chunk }) => chunk);
-  }, [chunks, search]);
+  const searchResults = useMemo(() => !search.trim() ? [] : chunks
+    .map((chunk) => ({ chunk, score: lexicalSearchScore(search, chunk.text).score }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 20), [chunks, search]);
 
-  return (
-    <div className="evidence-panel">
+  const evidenceCard = (id: string, label: string) => {
+    const unit = chunks.find((chunk) => chunk.id === id);
+    if (!unit) return null;
+    const match = candidates.find((candidate) => candidate.transcriptChunkId === id);
+    const selected = selectedChunkIds.includes(id);
+    const strength = getEvidenceStrength(match);
+
+    return <article className={`evidence-card ${selected ? "selected-evidence" : ""}`} key={id}>
+      <div className="unit-heading">
+        <strong>{label}</strong>
+        <span className={`strength-hint ${strength.className}`}>{strength.label}</span>
+      </div>
+      <small>{id} · lines {unit.startLine}–{unit.endLine}</small>
+      <p className="primary-evidence">{unit.text}</p>
+      {evidenceWarnings(claim, unit, match).map((warning) => <div className="evidence-warning" key={warning}>{warning}</div>)}
+      <button className={selected ? "unlink-button" : "compact-button"} aria-pressed={selected} onClick={() => onToggleEvidence(id)}>
+        {selected ? "✓ Selected · Unlink" : "Use this evidence"}
+      </button>
+    </article>;
+  };
+
+  return <div className="evidence-panel">
+    <div className="evidence-panel-heading">
       <span className="comparison-label">Transcript evidence</span>
-      <p className="primary-evidence">{selectedChunk?.text ?? candidates[0]?.transcriptText ?? "No plausible transcript evidence found"}</p>
-      {selectedChunk && selectedChunk.originalTurnText !== selectedChunk.text.replace(/^(?:C|P|P\/C):\s*/, "") && <details className="source-context"><summary>Original turn and context</summary><p>{selectedChunk.originalTurnText}</p>{selectedChunk.contextText && <small>{selectedChunk.contextText}</small>}</details>}
-      {selectedMatch && <div className="retrieval-meta">Retrieval similarity: {selectedMatch.semanticSimilarity.toFixed(3)}</div>}
-      {selectedMatch?.nli && <NliSignal match={selectedMatch} claimSection={claimSection} />}
-      {selectedMatch?.conflictingNumbers.map((conflict, index) => (
-        <div className="evidence-warning" key={`${conflict.avt}-${conflict.transcript}-${index}`}>⚠ Possible numerical discrepancy — AVT: {conflict.avt}; transcript: {conflict.transcript}</div>
-      ))}
-      {selectedMatch?.negationWarning && <div className="evidence-warning">⚠ Possible negation / contradiction</div>}
-
-      {candidates.length > 1 && <details className="other-evidence">
-        <summary>Other possible evidence</summary>
-        {candidates.slice(1).map((candidate, index) => (
-          <button key={candidate.transcriptChunkId} onClick={() => onSelect(candidate.transcriptChunkId)}>
-            <strong>Candidate {index + 2}</strong>
-            <span>{candidate.transcriptText}</span>
-            <small>Retrieval similarity: {candidate.semanticSimilarity.toFixed(3)}</small>
-            {candidate.nli && <NliSignal match={candidate} claimSection={claimSection} />}
-          </button>
-        ))}
-      </details>}
-
-      <details className="manual-search">
-        <summary>Search transcript manually</summary>
-        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search words or phrase…" />
-        <div>{searchResults.map((chunk) => <button key={chunk.id} onClick={() => onSelect(chunk.id)}><span>{highlightText(chunk.text, search)}</span>{chunk.contextText && <small>{chunk.contextText}</small>}</button>)}</div>
-      </details>
+      <p className="muted-copy">Select one or more passages. Context is shown beside the AVT claim.</p>
     </div>
-  );
+
+    <h4>Best transcript evidence</h4>
+    {candidates[0]
+      ? evidenceCard(candidates[0].transcriptChunkId, "Best evidence")
+      : <div className="no-plausible-match"><strong>No strong match</strong><p>No strong transcript evidence found.</p></div>}
+
+    <h4>Other possible evidence</h4>
+    {candidates.slice(1).map((candidate, index) => evidenceCard(candidate.transcriptChunkId, `Possible evidence ${index + 1}`))}
+    {candidates.length < 2 && <p className="muted-copy">No other candidates.</p>}
+
+    <div className="manual-search">
+      <label>Search transcript
+        <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Type part of a word or phrase…" />
+      </label>
+      {searchResults.map(({ chunk }, index) => evidenceCard(chunk.id, `Search result ${index + 1}`))}
+      {search.trim() && !searchResults.length && <p>No search results.</p>}
+    </div>
+  </div>;
 }
 
-function NliSignal({ match, claimSection }: { match: EvidenceMatch; claimSection: TranscriptAvtSection }) {
-  const entailment = match.nli?.entailment ?? 0;
-  const contradiction = match.nli?.contradiction ?? 0;
-  const neutral = match.nli?.neutral ?? 0;
-  const questionVsPlan = match.statementType === "clinician_question" && claimSection === "Plan and Requested Actions";
-  const label = questionVsPlan
-    ? "⚠ Question is not evidence of a plan action"
-    : entailment >= 0.58 && contradiction < 0.25 && !match.negationWarning && match.conflictingNumbers.length === 0
-    ? "✓ Likely same meaning"
-    : contradiction >= 0.45 || match.negationWarning
-      ? "⚠ Meaning may differ"
-      : neutral >= 0.6
-        ? "? Weak / unrelated match"
-        : "? Review meaning";
-  return <details className="matching-details"><summary>{label}</summary><small>Local NLI relationship scores: entailment {entailment.toFixed(2)}, contradiction {contradiction.toFixed(2)}, neutral {neutral.toFixed(2)}. Assistive only.</small></details>;
-}
-
-function highlightText(text: string, query: string) {
-  const terms = (query.match(/[a-z0-9]+/gi) ?? []).map(normalizeSearchToken);
-  if (!terms.length) return text;
-  const pattern = /[a-z0-9]+/gi;
-  const nodes: ReactNode[] = [];
-  let lastIndex = 0;
-  for (const match of text.matchAll(pattern)) {
-    const start = match.index ?? 0;
-    const word = match[0];
-    if (start > lastIndex) nodes.push(<Fragment key={`plain-${lastIndex}`}>{text.slice(lastIndex, start)}</Fragment>);
-    const normalized = normalizeSearchToken(word);
-    nodes.push(terms.includes(normalized) ? <mark key={`hit-${start}`}>{word}</mark> : <Fragment key={`word-${start}`}>{word}</Fragment>);
-    lastIndex = start + word.length;
+function getEvidenceStrength(match?: EvidenceMatch) {
+  if (!match) return { label: "No strong match", className: "weak" };
+  if (match.exactPhraseOverlap || match.phraseMatchScore >= .66 || (match.nli?.entailment ?? 0) >= .58) {
+    return { label: "Strong match", className: "strong" };
   }
-  if (lastIndex < text.length) nodes.push(<Fragment key={`tail-${lastIndex}`}>{text.slice(lastIndex)}</Fragment>);
-  return nodes;
+  return { label: "Possible match", className: "possible" };
 }

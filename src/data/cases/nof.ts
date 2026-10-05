@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const nofCase: ClinicalCase = {
-  id: "SCEN-06",
+  id: "SCEN-11",
   title: "Neck of femur fracture",
   specialty: "Orthopaedics / Emergency Medicine",
   setting: "Emergency Department",

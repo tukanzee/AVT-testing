@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const suicidalIdeationCase: ClinicalCase = {
-  id: "SCEN-08",
+  id: "SCEN-18",
   title: "Suicidal ideation",
   specialty: "Mental Health / Emergency Medicine",
   setting: "Emergency Department",

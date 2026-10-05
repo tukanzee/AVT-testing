@@ -1,4 +1,4 @@
-const NEGATION = /\b(no|not|denies|denied|never|without|negative|hasn't|haven't|didn't|doesn't|none)\b/i;
+const NEGATION = /\b(no|not|denies|denied|never|without|negative|hasn't|haven't|didn't|doesn't|don't|can't|cannot|unable|none)\b/i;
 
 export function hasNegation(text: string) {
   return NEGATION.test(text);

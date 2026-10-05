@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const svtCase: ClinicalCase = {
-  id: "SCEN-15",
+  id: "SCEN-19",
   title: "Paroxysmal supraventricular tachycardia",
   specialty: "Cardiology / Emergency Medicine",
   setting: "Emergency Department",

@@ -11,7 +11,7 @@ import type { ClinicalCase } from "../../types";
  *   information content and contaminate later AVT validation.
  */
 export const dkaCase: ClinicalCase = {
-  id: "SCEN-03",
+  id: "SCEN-7",
   title: "Diabetic ketoacidosis (DKA)",
   specialty: "Endocrinology / Emergency Medicine",
   setting: "Emergency Department",

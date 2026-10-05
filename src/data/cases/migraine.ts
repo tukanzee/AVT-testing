@@ -1,7 +1,7 @@
 import type { ClinicalCase } from "../../types";
 
 export const migraineCase: ClinicalCase = {
-  id: "SCEN-05",
+  id: "SCEN-10",
   title: "Acute migraine",
   specialty: "Neurology / Emergency Medicine",
   setting: "Emergency Department",
