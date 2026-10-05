@@ -4,12 +4,14 @@ import type {
   FirstNetComponent,
   ValidationCategory
 } from "./types";
-
-const MODEL_ID = "mixedbread-ai/mxbai-embed-xsmall-v1";
-const TRANSFORMERS_CDN = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1";
-const OMIT_THRESHOLD = 0.47;
-const REVIEW_THRESHOLD = 0.69;
-const ADDITION_THRESHOLD = 0.42;
+import {
+  judgeAvtStatementsAgainstSource,
+  judgeSourceFactsAgainstAvt,
+  type AvtJudgement,
+  type SemanticAvtSentence,
+  type SemanticSourceFact,
+  type SourceJudgement
+} from "./browserSemantic";
 
 export type ReviewSignal =
   | "Possible omission"
@@ -32,6 +34,8 @@ export interface ReviewCandidate {
   signals: ReviewSignal[];
   suggestedCategory?: ValidationCategory;
   description: string;
+  semanticStatus?: string;
+  semanticReason?: string;
 }
 
 export interface Level1Analysis {
@@ -41,44 +45,14 @@ export interface Level1Analysis {
 }
 
 type ProgressCallback = (message: string, percent?: number) => void;
-type Extractor = (texts: string[], options: { pooling: string; normalize: boolean }) => Promise<{ tolist(): number[][] }>;
-type AvtSentence = { id: string; component: FirstNetComponent; text: string };
-type SourceFact = { id: string; domain: string; text: string };
 
-let extractorPromise: Promise<Extractor> | null = null;
+type AvtSentence = SemanticAvtSentence & {
+  component: FirstNetComponent;
+};
 
-async function createExtractor(onProgress?: ProgressCallback): Promise<Extractor> {
-  const hasWebGpu = Boolean((navigator as Navigator & { gpu?: unknown }).gpu);
-  const device = hasWebGpu ? "webgpu" : "wasm";
-
-  onProgress?.(
-    hasWebGpu
-      ? "Loading local semantic matching model with WebGPU…"
-      : "WebGPU unavailable; loading local semantic matching model on CPU…"
-  );
-
-  const dynamicImport = new Function("url", "return import(url)") as (url: string) => Promise<{
-    pipeline: (task: string, model: string, options: Record<string, unknown>) => Promise<Extractor>;
-  }>;
-  const { pipeline } = await dynamicImport(TRANSFORMERS_CDN);
-
-  return pipeline("feature-extraction", MODEL_ID, {
-    device,
-    progress_callback: (progress: { progress?: number; file?: string }) => {
-      if (typeof progress.progress === "number") {
-        onProgress?.(
-          progress.file ? `Loading ${progress.file}…` : "Loading semantic model…",
-          Math.round(progress.progress)
-        );
-      }
-    }
-  });
-}
-
-async function getExtractor(onProgress?: ProgressCallback) {
-  if (!extractorPromise) extractorPromise = createExtractor(onProgress);
-  return extractorPromise;
-}
+type SourceFact = SemanticSourceFact & {
+  domain: string;
+};
 
 export async function analyseLevel1(
   groundTruth: GroundTruthExport,
@@ -100,88 +74,259 @@ export async function analyseLevel1(
         avtText: "",
         signals: ["Possible omission"],
         suggestedCategory: "Omission",
-        description: `Possible omission: ${fact.text}`
+        description: `Possible omission: ${fact.text}`,
+        semanticStatus: "not_present",
+        semanticReason: "No AVT content was supplied."
       }))
     };
   }
 
-  const texts = [...sourceFacts.map((fact) => fact.text), ...avtSentences.map((item) => item.text)];
-  onProgress?.("Comparing ground truth with AVT content…");
-
-  const extractor = await getExtractor(onProgress);
-  const output = await extractor(texts, { pooling: "mean", normalize: true });
-  const vectors = output.tolist();
-  const sourceVectors = vectors.slice(0, sourceFacts.length);
-  const avtVectors = vectors.slice(sourceFacts.length);
-
   const candidates: ReviewCandidate[] = [];
   let likelyCaptured = 0;
 
-  sourceFacts.forEach((fact, sourceIndex) => {
-    const ranked = avtSentences
-      .map((sentence, avtIndex) => ({ sentence, score: dot(sourceVectors[sourceIndex], avtVectors[avtIndex]) }))
-      .sort((a, b) => b.score - a.score);
+  onProgress?.("Checking exact matches before semantic review…");
 
-    const best = ranked[0];
-    const signals = compareProtectedAttributes(fact.text, best.sentence.text);
+  const unresolvedSourceFacts: SourceFact[] = [];
+
+  // PASS 1A: exact matches are deterministic and do not need the LLM.
+  sourceFacts.forEach((fact) => {
+    const exactMatches = avtSentences.filter(
+      (sentence) => normalize(sentence.text) === normalize(fact.text)
+    );
+
+    if (exactMatches.length === 0) {
+      unresolvedSourceFacts.push(fact);
+      return;
+    }
+
     const expected = expectedComponent(fact.domain);
+    const inExpectedComponent = exactMatches.some(
+      (match) => match.component === expected
+    );
 
-    if (best.score < OMIT_THRESHOLD) {
+    if (inExpectedComponent) {
+      likelyCaptured += 1;
+      return;
+    }
+
+    const first = exactMatches[0];
+    candidates.push({
+      id: `SOURCE-${fact.id}`,
+      component: first.component,
+      sourceFactIds: [fact.id],
+      sourceText: fact.text,
+      avtText: first.text,
+      signals: ["Possible wrong component"],
+      suggestedCategory: "Misclassification",
+      description: "Correct content documented under the wrong component.",
+      semanticStatus: "supported",
+      semanticReason: "Exact wording was found, but only in a different component."
+    });
+  });
+
+  // PASS 1B: semantic scan SOURCE -> whole AVT record.
+  let sourceJudgements: SourceJudgement[] = [];
+  if (unresolvedSourceFacts.length > 0) {
+    sourceJudgements = await judgeSourceFactsAgainstAvt(
+      unresolvedSourceFacts,
+      avtSentences,
+      onProgress
+    );
+  }
+
+  const avtById = new Map(avtSentences.map((sentence) => [sentence.id, sentence]));
+
+  sourceJudgements.forEach((judgement) => {
+    const fact = unresolvedSourceFacts.find(
+      (item) => item.id === judgement.sourceId
+    );
+    if (!fact) return;
+
+    const expected = expectedComponent(fact.domain);
+    const evidence = judgement.evidenceIds
+      .map((id) => avtById.get(id))
+      .filter((item): item is AvtSentence => Boolean(item));
+
+    const evidenceText = evidence.map((item) => item.text).join(" / ");
+    const evidenceComponent = chooseEvidenceComponent(evidence, expected);
+
+    if (judgement.relationship === "not_present") {
       candidates.push({
         id: `SOURCE-${fact.id}`,
         component: expected,
         sourceFactIds: [fact.id],
         sourceText: fact.text,
-        avtText: best.score > 0.25 ? best.sentence.text : "",
-        similarity: best.score,
+        avtText: "",
         signals: ["Possible omission"],
         suggestedCategory: "Omission",
-        description: `Possible omission: ${fact.text}`
+        description: `Possible omission: ${fact.text}`,
+        semanticStatus: judgement.relationship,
+        semanticReason: judgement.reason
       });
       return;
     }
 
-    if (best.sentence.component !== expected && best.score >= REVIEW_THRESHOLD) signals.push("Possible wrong component");
-    if (best.score < REVIEW_THRESHOLD) signals.push("Possible semantic change");
+    if (evidence.length === 0) {
+      throw new Error(
+        `The semantic model marked ${fact.id} as ${judgement.relationship} but did not return valid AVT evidence. Please run the analysis again.`
+      );
+    }
 
-    const uniqueSignals = unique(signals);
-    if (uniqueSignals.length > 0) {
+    const protectedSignals = compareProtectedAttributes(
+      fact.text,
+      evidenceText,
+      judgement.relationship
+    );
+
+    if (judgement.relationship === "contradicted") {
+      const signals = unique([
+        ...protectedSignals,
+        "Possible semantic change" as ReviewSignal
+      ]);
+
       candidates.push({
         id: `SOURCE-${fact.id}`,
-        component: best.sentence.component,
+        component: evidenceComponent,
         sourceFactIds: [fact.id],
         sourceText: fact.text,
-        avtText: best.sentence.text,
-        similarity: best.score,
-        signals: uniqueSignals,
-        suggestedCategory: suggestCategory(uniqueSignals),
-        description: describeSignals(uniqueSignals)
+        avtText: evidenceText,
+        signals,
+        suggestedCategory: "Omission",
+        description: "The AVT wording appears to contradict the source fact.",
+        semanticStatus: judgement.relationship,
+        semanticReason: judgement.reason
       });
-    } else {
-      likelyCaptured += 1;
+      return;
     }
+
+    if (judgement.relationship === "partial" || protectedSignals.length > 0) {
+      const signals = unique([
+        ...protectedSignals,
+        ...(judgement.relationship === "partial"
+          ? (["Possible semantic change"] as ReviewSignal[])
+          : [])
+      ]);
+
+      candidates.push({
+        id: `SOURCE-${fact.id}`,
+        component: evidenceComponent,
+        sourceFactIds: [fact.id],
+        sourceText: fact.text,
+        avtText: evidenceText,
+        signals: signals.length ? signals : ["Possible semantic change"],
+        suggestedCategory: "Over-simplification",
+        description: "Related AVT content was found but the full source meaning may not be preserved.",
+        semanticStatus: judgement.relationship,
+        semanticReason: judgement.reason
+      });
+      return;
+    }
+
+    // SUPPORTED: only now consider component placement.
+    const supportedInExpectedComponent = evidence.some(
+      (item) => item.component === expected
+    );
+
+    if (!supportedInExpectedComponent) {
+      candidates.push({
+        id: `SOURCE-${fact.id}`,
+        component: evidenceComponent,
+        sourceFactIds: [fact.id],
+        sourceText: fact.text,
+        avtText: evidenceText,
+        signals: ["Possible wrong component"],
+        suggestedCategory: "Misclassification",
+        description: "Supported content appears only under a different FirstNet component.",
+        semanticStatus: judgement.relationship,
+        semanticReason: judgement.reason
+      });
+      return;
+    }
+
+    likelyCaptured += 1;
   });
 
-  avtSentences.forEach((sentence, avtIndex) => {
-    const bestSource = sourceFacts
-      .map((fact, sourceIndex) => ({ fact, score: dot(avtVectors[avtIndex], sourceVectors[sourceIndex]) }))
-      .sort((a, b) => b.score - a.score)[0];
+  // PASS 2: AVT -> SOURCE. This finds additions and gives contradictions the
+  // second side of the discrepancy (source omission + contradictory AVT content).
+  const nonExactAvtSentences = avtSentences.filter(
+    (sentence) =>
+      !sourceFacts.some(
+        (fact) => normalize(fact.text) === normalize(sentence.text)
+      )
+  );
 
-    if (bestSource && bestSource.score < ADDITION_THRESHOLD && meaningful(sentence.text)) {
+  let avtJudgements: AvtJudgement[] = [];
+  if (nonExactAvtSentences.length > 0) {
+    avtJudgements = await judgeAvtStatementsAgainstSource(
+      nonExactAvtSentences,
+      sourceFacts,
+      onProgress
+    );
+  }
+
+  const sourceById = new Map(sourceFacts.map((fact) => [fact.id, fact]));
+
+  avtJudgements.forEach((judgement) => {
+    if (judgement.relationship === "supported") return;
+
+    const statement = avtById.get(judgement.avtId);
+    if (!statement) return;
+
+    const sourceEvidence = judgement.sourceIds
+      .map((id) => sourceById.get(id))
+      .filter((item): item is SourceFact => Boolean(item));
+
+    const sourceText = sourceEvidence.map((item) => item.text).join(" / ");
+
+    if (judgement.relationship === "partial") {
       candidates.push({
-        id: `ADDITION-${sentence.id}`,
-        component: sentence.component,
-        sourceFactIds: [],
-        sourceText: "",
-        avtText: sentence.text,
-        similarity: bestSource.score,
+        id: `ADDITION-${statement.id}`,
+        component: statement.component,
+        sourceFactIds: sourceEvidence.map((item) => item.id),
+        sourceText,
+        avtText: statement.text,
         signals: ["Possible unsupported content"],
         suggestedCategory: "Addition (not in script)",
-        description: "Possible unsupported content; no close source fact was found."
+        description: "The AVT statement is only partly grounded and may add unsupported or inferred content.",
+        semanticStatus: judgement.relationship,
+        semanticReason: judgement.reason
+      });
+      return;
+    }
+
+    if (judgement.relationship === "contradicted") {
+      candidates.push({
+        id: `ADDITION-${statement.id}`,
+        component: statement.component,
+        sourceFactIds: sourceEvidence.map((item) => item.id),
+        sourceText,
+        avtText: statement.text,
+        signals: ["Possible unsupported content"],
+        suggestedCategory: "Addition (not in script)",
+        description: "The AVT statement conflicts with the source and may represent unsupported contradictory content.",
+        semanticStatus: judgement.relationship,
+        semanticReason: judgement.reason
+      });
+      return;
+    }
+
+    if (judgement.relationship === "not_supported") {
+      candidates.push({
+        id: `ADDITION-${statement.id}`,
+        component: statement.component,
+        sourceFactIds: [],
+        sourceText: "",
+        avtText: statement.text,
+        signals: ["Possible unsupported content"],
+        suggestedCategory: "Addition (not in script)",
+        description: "Possible unsupported content; no source support was found.",
+        semanticStatus: judgement.relationship,
+        semanticReason: judgement.reason
       });
     }
   });
 
+  // PASS 3: exact duplication remains deterministic.
   findDuplicates(avtSentences).forEach((duplicate, index) => {
     candidates.push({
       id: `DUP-${index + 1}`,
@@ -191,106 +336,204 @@ export async function analyseLevel1(
       avtText: `${duplicate.first.text} / ${duplicate.second.text}`,
       signals: ["Possible duplication"],
       suggestedCategory: "Duplication",
-      description: "Possible duplicate content detected across the AVT record."
+      description: "Possible duplicate content detected across the AVT record.",
+      semanticStatus: "deterministic",
+      semanticReason: "The same normalized wording appears more than once."
     });
   });
 
-  return { sourceFacts: sourceFacts.length, likelyCaptured, candidates: dedupeCandidates(candidates) };
+  onProgress?.("Semantic screening complete.", 100);
+
+  return {
+    sourceFacts: sourceFacts.length,
+    likelyCaptured,
+    candidates: dedupeCandidates(candidates)
+  };
 }
 
 function buildSourceFacts(groundTruth: GroundTruthExport): SourceFact[] {
-  const facts: SourceFact[] = groundTruth.facts.map((fact) => ({ id: fact.id, domain: fact.domain, text: fact.text }));
-  splitSentences(groundTruth.additionalSpokenInformation).forEach((text, index) => {
-    facts.push({ id: `additional-${index + 1}`, domain: "History", text });
-  });
+  const facts: SourceFact[] = groundTruth.facts.map((fact) => ({
+    id: fact.id,
+    domain: fact.domain,
+    text: fact.text
+  }));
+
+  splitSentences(groundTruth.additionalSpokenInformation).forEach(
+    (text, index) => {
+      facts.push({
+        id: `additional-${index + 1}`,
+        domain: "History",
+        text
+      });
+    }
+  );
+
   return facts;
 }
 
 function buildAvtSentences(avtOutput: AvtComponentContent): AvtSentence[] {
   const result: AvtSentence[] = [];
+
   Object.entries(avtOutput).forEach(([component, content]) => {
     splitSentences(content).forEach((text, index) => {
-      result.push({ id: `${slug(component)}-${index + 1}`, component: component as FirstNetComponent, text });
+      result.push({
+        id: `${componentCode(component as FirstNetComponent)}-${index + 1}`,
+        component: component as FirstNetComponent,
+        text
+      });
     });
   });
+
   return result;
 }
 
 function splitSentences(text: string) {
-  return text.replace(/^[•\-*]+\s*/gm, "").split(/\n+|(?<=[.!?;])\s+/).map((item) => item.trim()).filter((item) => item.length >= 3);
+  return text
+    .replace(/^[•\-*]+\s*/gm, "")
+    .split(/\n+|(?<=[.!?;])\s+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 3);
 }
 
 function expectedComponent(domain: string): FirstNetComponent {
   if (domain === "Review of systems") return "Review of Systems";
-  if (["Examination", "Observations", "Investigations"].includes(domain)) return "Examination Findings";
-  if (["Plan / actions", "Team involvement"].includes(domain)) return "Plan and Requested Actions";
+
+  if (["Examination", "Observations", "Investigations"].includes(domain)) {
+    return "Examination Findings";
+  }
+
+  if (["Plan / actions", "Team involvement"].includes(domain)) {
+    return "Plan and Requested Actions";
+  }
+
   return "History of Presenting Complaint";
 }
 
-function compareProtectedAttributes(source: string, avt: string): ReviewSignal[] {
+function chooseEvidenceComponent(
+  evidence: AvtSentence[],
+  expected: FirstNetComponent
+): FirstNetComponent {
+  const expectedEvidence = evidence.find(
+    (item) => item.component === expected
+  );
+  return expectedEvidence?.component ?? evidence[0]?.component ?? expected;
+}
+
+function compareProtectedAttributes(
+  source: string,
+  evidence: string,
+  relationship: SourceJudgement["relationship"]
+): ReviewSignal[] {
   const signals: ReviewSignal[] = [];
+
   const sourceNumbers = numbers(source);
-  const avtNumbers = numbers(avt);
-  if (sourceNumbers.length > 0 && avtNumbers.length > 0 && !sameSet(sourceNumbers, avtNumbers)) signals.push("Number mismatch");
-  if (hasNegation(source) !== hasNegation(avt)) signals.push("Negation mismatch");
+  const evidenceNumbers = numbers(evidence);
+
+  // Extra numbers in a longer AVT sentence do not constitute a mismatch.
+  // Only flag when a source number is absent from the supporting evidence.
+  if (
+    sourceNumbers.length > 0 &&
+    !sourceNumbers.every((value) => evidenceNumbers.includes(value))
+  ) {
+    signals.push("Number mismatch");
+  }
+
+  const sourceNegated = hasNegation(source);
+  const evidenceNegated = hasNegation(evidence);
+
+  // Be conservative with long sentences. A positive source fact should only
+  // be treated as a negation mismatch when Qwen has already judged a contradiction.
+  if (
+    (sourceNegated && !evidenceNegated) ||
+    (!sourceNegated && evidenceNegated && relationship === "contradicted")
+  ) {
+    signals.push("Negation mismatch");
+  }
+
   const sourceSide = laterality(source);
-  const avtSide = laterality(avt);
-  if (sourceSide && avtSide && sourceSide !== avtSide) signals.push("Laterality mismatch");
+  const evidenceSide = laterality(evidence);
+  if (sourceSide && evidenceSide && sourceSide !== evidenceSide) {
+    signals.push("Laterality mismatch");
+  }
+
   const sourceTiming = timing(source);
-  const avtTiming = timing(avt);
-  if (sourceTiming && avtTiming && sourceTiming !== avtTiming) signals.push("Timing mismatch");
+  const evidenceTiming = timing(evidence);
+  if (sourceTiming && evidenceTiming && sourceTiming !== evidenceTiming) {
+    signals.push("Timing mismatch");
+  }
+
   return signals;
 }
 
-function suggestCategory(signals: ReviewSignal[]): ValidationCategory | undefined {
-  if (signals.includes("Possible omission")) return "Omission";
-  if (signals.includes("Possible wrong component")) return "Misclassification";
-  if (signals.includes("Possible unsupported content")) return "Addition (not in script)";
-  if (signals.includes("Possible duplication")) return "Duplication";
-  if (signals.includes("Possible semantic change")) return "Over-simplification";
-  return undefined;
-}
-
-function describeSignals(signals: ReviewSignal[]) { return signals.length === 1 ? signals[0] : signals.join("; "); }
 function findDuplicates(sentences: AvtSentence[]) {
   const duplicates: Array<{ first: AvtSentence; second: AvtSentence }> = [];
+
   for (let i = 0; i < sentences.length; i += 1) {
     for (let j = i + 1; j < sentences.length; j += 1) {
       const first = normalize(sentences[i].text);
       const second = normalize(sentences[j].text);
-      if (first.length >= 12 && first === second) duplicates.push({ first: sentences[i], second: sentences[j] });
+
+      if (first.length >= 12 && first === second) {
+        duplicates.push({ first: sentences[i], second: sentences[j] });
+      }
     }
   }
+
   return duplicates;
 }
-function numbers(text: string) { return text.match(/\b\d+(?:\.\d+)?\b/g) ?? []; }
-function hasNegation(text: string) { return /\b(no|not|never|none|denies|denied|without|negative for|hasn't|haven't|didn't|doesn't)\b/i.test(text); }
+
+function numbers(text: string): string[] {
+  return Array.from(text.match(/\b\d+(?:\.\d+)?\b/g) ?? []);
+}
+
+function hasNegation(text: string) {
+  return /\b(no|not|never|none|denies|denied|without|negative for|hasn't|haven't|didn't|doesn't)\b/i.test(
+    text
+  );
+}
+
 function laterality(text: string) {
   if (/\bleft\b/i.test(text)) return "left";
   if (/\bright\b/i.test(text)) return "right";
   if (/\bbilateral\b|\bboth\b/i.test(text)) return "bilateral";
   return "";
 }
+
 function timing(text: string) {
-  const match = text.toLowerCase().match(/\b(?:today|yesterday|tonight|this morning|this afternoon|\d+\s*(?:hour|hours|day|days|week|weeks|month|months|year|years))\b/);
+  const match = text.toLowerCase().match(
+    /\b(?:today|yesterday|tonight|this morning|this afternoon|\d+\s*(?:hour|hours|day|days|week|weeks|month|months|year|years))\b/
+  );
   return match?.[0] ?? "";
 }
-function sameSet(a: string[], b: string[]) {
-  const sortedA = [...a].sort();
-  const sortedB = [...b].sort();
-  return sortedA.length === sortedB.length && sortedA.every((value, index) => value === sortedB[index]);
+
+function normalize(text: string) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
-function dot(a: number[], b: number[]) {
-  let total = 0;
-  for (let i = 0; i < Math.min(a.length, b.length); i += 1) total += a[i] * b[i];
-  return total;
+
+function componentCode(component: FirstNetComponent) {
+  switch (component) {
+    case "History of Presenting Complaint":
+      return "HPC";
+    case "Review of Systems":
+      return "ROS";
+    case "Examination Findings":
+      return "EXAM";
+    case "Actions for Patient":
+      return "PAT";
+    case "Actions for GP":
+      return "GP";
+    case "Plan and Requested Actions":
+      return "PLAN";
+  }
 }
-function meaningful(text: string) { return normalize(text).split(" ").filter(Boolean).length >= 3; }
-function normalize(text: string) { return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
-function slug(text: string) { return normalize(text).replace(/\s+/g, "-"); }
-function unique<T>(items: T[]) { return Array.from(new Set(items)); }
+
+function unique<T>(items: T[]) {
+  return Array.from(new Set(items));
+}
+
 function dedupeCandidates(candidates: ReviewCandidate[]) {
   const seen = new Set<string>();
+
   return candidates.filter((candidate) => {
     const key = `${candidate.sourceText}|${candidate.avtText}|${candidate.signals.join("|")}`;
     if (seen.has(key)) return false;
