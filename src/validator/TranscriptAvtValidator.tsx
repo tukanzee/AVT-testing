@@ -66,7 +66,10 @@ export default function TranscriptAvtValidator({ onBack }: Props) {
 
   const allResidualCandidates = comparison.omissionCandidates.filter((candidate) => residualIds.has(candidate.transcriptChunkId));
   const skippedResidualCandidates = allResidualCandidates.filter((candidate) => omissionDecisions[candidate.itemId]?.skipped);
-  const activeResidualCandidates = allResidualCandidates.filter((candidate) => !omissionDecisions[candidate.itemId]?.skipped);
+  const activeResidualCandidates = allResidualCandidates.filter((candidate) => {
+    const decision = omissionDecisions[candidate.itemId];
+    return !decision?.reviewed && !decision?.skipped;
+  });
   const reviewedResidualCandidates = comparison.omissionCandidates.filter((candidate) => omissionDecisions[candidate.itemId]?.reviewed);
   const visibleOmissionCandidates = residualQueueMode === "reviewed"
     ? reviewedResidualCandidates
@@ -241,26 +244,196 @@ export default function TranscriptAvtValidator({ onBack }: Props) {
     });
   };
 
+  const advanceClaimAfterDecision = (targetQueue: "reviewed" | "skipped") => {
+    // If the item remains in the queue currently being viewed, move forward.
+    // If it leaves the current queue, keep the same index because the next item
+    // automatically shifts into that position.
+    if (claimQueueMode === targetQueue) {
+      setClaimIndex(Math.max(0, Math.min(visibleClaims.length - 1, safeClaimIndex + 1)));
+    }
+  };
+
+  const advanceResidualAfterDecision = (targetQueue: "reviewed" | "skipped") => {
+    if (residualQueueMode === targetQueue) {
+      setOmissionIndex(Math.max(0, Math.min(visibleOmissionCandidates.length - 1, safeOmissionIndex + 1)));
+    }
+  };
+
+  const markCurrentClaimSupported = () => {
+    if (!claim) return;
+
+    const existingIds = claimDecisions[claim.id]?.transcriptChunkIds ?? [];
+    const best = comparison.matches[claim.id]?.[0];
+    const strongBestId = best && (
+      best.exactPhraseOverlap ||
+      (best.nli?.entailment ?? 0) >= 0.58
+    ) ? best.transcriptChunkId : undefined;
+
+    const transcriptChunkIds = existingIds.length
+      ? existingIds
+      : strongBestId
+        ? [strongBestId]
+        : [];
+
+    // No automatic clinical decision is made here. The reviewer still presses
+    // C / Correct; this only saves the separate evidence-selection click when
+    // retrieval already has a strong best match.
+    if (!transcriptChunkIds.length) return;
+
+    updateClaimDecision(claim.id, {
+      transcriptChunkIds,
+      correctSupported: true,
+      categories: [],
+      reviewed: true,
+      skipped: false
+    });
+    advanceClaimAfterDecision("reviewed");
+  };
+
+  const saveCurrentClaimFinding = () => {
+    if (!claim) return;
+    const categories = claimDecisions[claim.id]?.categories ?? [];
+    if (!categories.length) return;
+
+    updateClaimDecision(claim.id, {
+      reviewed: true,
+      correctSupported: false,
+      skipped: false
+    });
+    advanceClaimAfterDecision("reviewed");
+  };
+
+  const skipCurrentClaim = () => {
+    if (!claim) return;
+    updateClaimDecision(claim.id, { skipped: true, reviewed: false });
+    advanceClaimAfterDecision("skipped");
+  };
+
+  const confirmCurrentResidualCovered = () => {
+    if (!omission) return;
+
+    const decision = omissionDecisions[omission.itemId];
+    const selectedClaimIds = decision?.avtClaimIds?.length
+      ? decision.avtClaimIds
+      : decision?.avtClaimId
+        ? [decision.avtClaimId]
+        : omission.bestAvtClaimId
+          ? [omission.bestAvtClaimId]
+          : [];
+
+    if (!selectedClaimIds.length) return;
+
+    const transcriptChunkIds = Array.from(new Set([
+      omission.transcriptChunkId,
+      ...(decision?.transcriptChunkIds ?? [])
+    ]));
+
+    updateOmissionDecision(omission.itemId, {
+      avtClaimIds: selectedClaimIds,
+      avtClaimId: selectedClaimIds[0],
+      transcriptChunkIds,
+      correctSupported: true,
+      irrelevant: false,
+      categories: [],
+      reviewed: true,
+      skipped: false
+    });
+    advanceResidualAfterDecision("reviewed");
+  };
+
+  const saveCurrentResidualFinding = () => {
+    if (!omission) return;
+    const categories = omissionDecisions[omission.itemId]?.categories ?? [];
+    if (!categories.length) return;
+
+    updateOmissionDecision(omission.itemId, {
+      reviewed: true,
+      irrelevant: false,
+      correctSupported: false,
+      skipped: false
+    });
+    advanceResidualAfterDecision("reviewed");
+  };
+
+  const skipCurrentResidual = () => {
+    if (!omission) return;
+    updateOmissionDecision(omission.itemId, { skipped: true, reviewed: false });
+    advanceResidualAfterDecision("skipped");
+  };
+
   useEffect(() => {
     if (stage !== "claims" && stage !== "omissions") return;
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
-      if (/^[1-9]$/.test(event.key) || event.key === "ArrowLeft" || event.key === "ArrowRight") event.preventDefault();
+
+      const key = event.key.toLowerCase();
+      const handled =
+        /^[1-9]$/.test(event.key) ||
+        key === "c" ||
+        key === "s" ||
+        event.key === "Enter" ||
+        event.key === "ArrowLeft" ||
+        event.key === "ArrowRight";
+
+      if (handled) event.preventDefault();
+
       if (/^[1-9]$/.test(event.key)) {
         const category = VALIDATION_CATEGORIES[Number(event.key) - 1];
         if (!category) return;
         if (stage === "claims" && claim) toggleClaimCategory(claim.id, category);
         if (stage === "omissions" && omission) toggleOmissionCategory(omission.itemId, category);
-      } else if (stage === "claims" && event.key === "ArrowLeft") setClaimIndex(Math.max(0, safeClaimIndex - 1));
-      else if (stage === "claims" && event.key === "ArrowRight") setClaimIndex(Math.min(visibleClaims.length - 1, safeClaimIndex + 1));
-      else if (stage === "omissions" && event.key === "ArrowLeft") setOmissionIndex(Math.max(0, safeOmissionIndex - 1));
-      else if (stage === "omissions" && event.key === "ArrowRight") setOmissionIndex(Math.min(visibleOmissionCandidates.length - 1, safeOmissionIndex + 1));
+        return;
+      }
+
+      if (key === "c") {
+        if (stage === "claims") markCurrentClaimSupported();
+        if (stage === "omissions") confirmCurrentResidualCovered();
+        return;
+      }
+
+      if (event.key === "Enter") {
+        if (stage === "claims") saveCurrentClaimFinding();
+        if (stage === "omissions") saveCurrentResidualFinding();
+        return;
+      }
+
+      if (key === "s") {
+        if (stage === "claims") skipCurrentClaim();
+        if (stage === "omissions") skipCurrentResidual();
+        return;
+      }
+
+      if (stage === "claims" && event.key === "ArrowLeft") {
+        setClaimIndex(Math.max(0, safeClaimIndex - 1));
+      } else if (stage === "claims" && event.key === "ArrowRight") {
+        setClaimIndex(Math.min(visibleClaims.length - 1, safeClaimIndex + 1));
+      } else if (stage === "omissions" && event.key === "ArrowLeft") {
+        setOmissionIndex(Math.max(0, safeOmissionIndex - 1));
+      } else if (stage === "omissions" && event.key === "ArrowRight") {
+        setOmissionIndex(Math.min(visibleOmissionCandidates.length - 1, safeOmissionIndex + 1));
+      }
     };
+
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [stage, claim, omission, visibleClaims.length, visibleOmissionCandidates.length, safeClaimIndex, safeOmissionIndex, claimDecisions, omissionDecisions]);
+  }, [
+    stage,
+    claim,
+    omission,
+    visibleClaims.length,
+    visibleOmissionCandidates.length,
+    safeClaimIndex,
+    safeOmissionIndex,
+    claimDecisions,
+    omissionDecisions,
+    comparison,
+    claimQueueMode,
+    residualQueueMode
+  ]);
 
   const reviewedClaimCount = Object.values(claimDecisions).filter((decision) => decision.reviewed).length;
   const reviewedOmissionCount = Object.values(omissionDecisions).filter((decision) => decision.reviewed).length;
@@ -359,8 +532,9 @@ export default function TranscriptAvtValidator({ onBack }: Props) {
           reviewed={reviewedClaimCount}
           onDecision={(decision) => updateClaimDecision(claim.id, decision)}
           onToggleCategory={(category) => toggleClaimCategory(claim.id, category)}
-          onToggleSupported={() => updateClaimDecision(claim.id, { correctSupported: !claimDecisions[claim.id]?.correctSupported, categories: [], reviewed: !claimDecisions[claim.id]?.correctSupported })}
-          onSkip={() => updateClaimDecision(claim.id, { skipped: true, reviewed: false })}
+          onToggleSupported={markCurrentClaimSupported}
+          onReviewedAction={() => advanceClaimAfterDecision("reviewed")}
+          onSkip={skipCurrentClaim}
           onPrevious={() => setClaimIndex(Math.max(0, safeClaimIndex - 1))}
           onNext={() => setClaimIndex(Math.min(visibleClaims.length - 1, safeClaimIndex + 1))}
         />
@@ -386,7 +560,8 @@ export default function TranscriptAvtValidator({ onBack }: Props) {
           remainingTotal={allResidualCandidates.length}
           reviewed={reviewedOmissionCount}
           onDecision={(decision) => replaceOmissionDecision(omission.itemId, decision)}
-          onSkip={() => updateOmissionDecision(omission.itemId, { skipped: true, reviewed: false })}
+          onReviewedAction={() => advanceResidualAfterDecision("reviewed")}
+          onSkip={skipCurrentResidual}
           onPrevious={() => setOmissionIndex(Math.max(0, safeOmissionIndex - 1))}
           onNext={() => setOmissionIndex(Math.min(visibleOmissionCandidates.length - 1, safeOmissionIndex + 1))}
         />

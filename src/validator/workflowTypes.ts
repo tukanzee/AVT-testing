@@ -78,7 +78,12 @@ export interface OmissionDecision {
   correctSupported: boolean;
   categories: import("./types").ValidationCategory[];
   comment: string;
+  /** First selected AVT claim retained for backwards compatibility with older exports/UI. */
   avtClaimId?: string;
+  /** All AVT claims the reviewer linked to this residual transcript item. */
+  avtClaimIds?: string[];
+  /** Transcript units explicitly linked while reviewing this residual item. */
+  transcriptChunkIds?: string[];
   irrelevant?: boolean;
   skipped?: boolean;
 }

@@ -18,13 +18,19 @@ type Props = {
   onNext: () => void;
   onToggleCategory: (category: ValidationCategory) => void;
   onToggleSupported: () => void;
+  onReviewedAction: () => void;
   onSkip: () => void;
 };
 
 export default function ClaimReview(props: Props) {
   const reviewTotal = props.reviewTotal ?? props.total;
   const selectedChunkIds = props.decision?.transcriptChunkIds ?? [];
-  const bestEvidenceId = props.candidates[0]?.transcriptChunkId;
+  const bestEvidence = props.candidates[0];
+  const bestEvidenceId = bestEvidence?.transcriptChunkId;
+  const canAutoLinkBestEvidence = Boolean(
+    bestEvidence &&
+    (bestEvidence.exactPhraseOverlap || (bestEvidence.nli?.entailment ?? 0) >= 0.58)
+  );
 
   const update = (change: Partial<ValidationDecision>) => props.onDecision({
     claimId: props.claim.id,
@@ -101,7 +107,15 @@ export default function ClaimReview(props: Props) {
 
         <div className="verdict-panel">
           <span className="comparison-label">Human review · {props.decision?.reviewed ? "Reviewed" : "UNREVIEWED"}</span>
-          <button className={`supported-outcome ${props.decision?.correctSupported ? "active" : ""}`} disabled={!selectedChunkIds.length} onClick={props.onToggleSupported}>✓ Correct / supported</button>
+          <small className="muted-copy">Quick review: C = correct · 1–9 = categories · Enter = save finding · S = skip</small>
+          <button
+            className={`supported-outcome ${props.decision?.correctSupported ? "active" : ""}`}
+            disabled={!selectedChunkIds.length && !canAutoLinkBestEvidence}
+            onClick={props.onToggleSupported}
+            title={!selectedChunkIds.length && canAutoLinkBestEvidence ? "Uses the current strong best evidence automatically" : undefined}
+          >
+            ✓ Correct / supported <kbd>C</kbd>
+          </button>
           <div className="taxonomy-heading"><strong>Finding categories</strong><span>Keys 1–9 toggle</span></div>
           <div className="taxonomy-options">
             {VALIDATION_CATEGORIES.map((category, index) => <button
@@ -118,12 +132,15 @@ export default function ClaimReview(props: Props) {
           <button
             className="primary-button review-action"
             disabled={!props.decision?.categories?.length}
-            onClick={() => update({ reviewed: true, correctSupported: false })}
+            onClick={() => {
+              update({ reviewed: true, correctSupported: false });
+              props.onReviewedAction();
+            }}
           >
-            Save finding
+            Save finding <kbd>Enter</kbd>
           </button>
           <label className="comment-label">Reviewer comment<textarea rows={4} value={props.decision?.comment ?? ""} onChange={(event) => update({ comment: event.target.value })} /></label>
-          <button className="secondary-button skip-button" onClick={props.onSkip}>Skip / come back later</button>
+          <button className="secondary-button skip-button" onClick={props.onSkip}>Skip / come back later <kbd>S</kbd></button>
         </div>
       </div>
 

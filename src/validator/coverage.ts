@@ -37,16 +37,27 @@ export function coverageMap(units: TranscriptComparisonUnit[], decisions: Record
     });
   });
 
-  // Pass 2 candidate selection alone is not enough to resolve a residual item.
+  // Pass 2 selection alone is not enough to resolve a residual item.
   // Only an explicitly confirmed residual link counts as coverage.
+  // Residual review can link multiple AVT claims to multiple transcript units.
   Object.values(residual)
-    .filter((decision) => decision.reviewed && decision.correctSupported && decision.avtClaimId && !decision.categories.length && !decision.irrelevant)
+    .filter((decision) => decision.reviewed && decision.correctSupported && !decision.categories.length && !decision.irrelevant)
     .forEach((decision) => {
-      links.push({
-        claimId: decision.avtClaimId!,
-        unitId: decision.itemId.replace(/^omission-/, ''),
-        source: 'residual',
-        confirmed: true
+      const claimIds = decision.avtClaimIds?.length
+        ? decision.avtClaimIds
+        : decision.avtClaimId
+          ? [decision.avtClaimId]
+          : [];
+
+      if (!claimIds.length) return;
+
+      const currentUnitId = decision.itemId.replace(/^omission-/, '');
+      const unitIds = Array.from(new Set([currentUnitId, ...(decision.transcriptChunkIds ?? [])]));
+
+      claimIds.forEach((claimId) => {
+        unitIds.forEach((unitId) => {
+          links.push({ claimId, unitId, source: 'residual', confirmed: true });
+        });
       });
     });
 
